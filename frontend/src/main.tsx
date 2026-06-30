@@ -51,6 +51,11 @@ interface MealSlot {
   makes_lunch: boolean;
   notes: string;
   sides: SlotSide[];
+  inventory_score?: {
+    score: number | null;
+    missing: string[];
+    available: string[];
+  };
 }
 
 interface SlotSide {
@@ -1440,7 +1445,7 @@ function NotificationsSection() {
     const reg = await navigator.serviceWorker.ready;
     const sub = await reg.pushManager.subscribe({
       userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(vapidKey),
+      applicationServerKey: urlBase64ToUint8Array(vapidKey).buffer as ArrayBuffer,
     });
     await api("/api/notifications/subscriptions", {
       method: "POST",
