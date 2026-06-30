@@ -1,0 +1,80 @@
+name: Publish Docker image
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: kebel87/menu_hebdo
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha,prefix=sha-
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # - name: Trigger Komodo redeploy
+      #   if: success() && github.ref_type == 'branch'
+      #   env:
+      #     KOMODO_WEBHOOK_URL: ${{ secrets.KOMODO_WEBHOOK_URL }}
+      #     KOMODO_WEBHOOK_SECRET: ${{ secrets.KOMODO_WEBHOOK_SECRET }}
+      #   run: |
+      #     payload=$(jq -nc \
+      #       --arg ref "refs/heads/${GITHUB_REF_NAME}" \
+      #       --arg after "${GITHUB_SHA}" \
+      #       --arg repository "${GITHUB_REPOSITORY}" \
+      #       '{ref: $ref, after: $after, repository: {full_name: $repository}}')
+      #
+      #     signature=$(printf '%s' "$payload" \
+      #       | openssl dgst -sha256 -hmac "$KOMODO_WEBHOOK_SECRET" -binary \
+      #       | xxd -p -c 256)
+      #
+      #     curl -fsSL -X POST "$KOMODO_WEBHOOK_URL" \
+      #       -H "Content-Type: application/json" \
+      #       -H "X-GitHub-Event: push" \
+      #       -H "X-Hub-Signature-256: sha256=$signature" \
+      #       -d "$payload"
