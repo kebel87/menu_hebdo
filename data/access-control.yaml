@@ -1,0 +1,26 @@
+proxy_headers:
+  subject: X-Forwarded-User
+  email: X-Forwarded-Email
+  name: X-Forwarded-Preferred-Username
+  groups: X-Forwarded-Groups
+
+defaults:
+  roles: [viewer]
+
+roles:
+  viewer:
+    permissions: [menu.read, notifications.subscribe]
+  editor:
+    permissions: [menu.read, menu.edit, notifications.subscribe]
+  admin:
+    permissions: [menu.read, menu.edit, settings.manage, notifications.subscribe]
+
+groups: []
+
+users:
+  - email: kevin.belleau@gmail.com
+    display_name: Kevin Belleau
+    roles: [admin]
+  - email: amelizotte@gmail.com
+    display_name: Amélie Lizotte
+    roles: [editor]

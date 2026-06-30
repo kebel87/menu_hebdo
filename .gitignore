@@ -1,0 +1,9 @@
+data/*.db
+data/backups/
+__pycache__/
+*.pyc
+.env
+.env.local
+node_modules/
+frontend/dist/
+frontend/node_modules/

@@ -1,0 +1,50 @@
+services:
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.12.0
+    restart: unless-stopped
+    ports:
+      - "4191:4180"
+    environment:
+      OAUTH2_PROXY_PROVIDER: oidc
+      OAUTH2_PROXY_CLIENT_ID: "${OAUTH2_PROXY_CLIENT_ID}"
+      OAUTH2_PROXY_CLIENT_SECRET: "${OAUTH2_PROXY_CLIENT_SECRET}"
+      OAUTH2_PROXY_OIDC_ISSUER_URL: "https://auth.kb87.net"
+      OAUTH2_PROXY_REDIRECT_URL: "https://menu.kb87.net/oauth2/callback"
+      OAUTH2_PROXY_UPSTREAMS: "http://menu-hebdo:8000"
+      OAUTH2_PROXY_COOKIE_SECRET: "${OAUTH2_PROXY_COOKIE_SECRET}"
+      OAUTH2_PROXY_COOKIE_NAME: "_oauth2_proxy_menu"
+      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      OAUTH2_PROXY_PASS_USER_HEADERS: "true"
+      OAUTH2_PROXY_PASS_ACCESS_TOKEN: "false"
+      OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
+      OAUTH2_PROXY_SKIP_AUTH_ROUTES: "^/manifest.webmanifest$,^/icons/.*"
+    networks:
+      - default
+
+  menu-hebdo:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8091:8000"
+    environment:
+      AUTH_MODE: "${AUTH_MODE:-proxy}"
+      MEALIE_URL: "https://mealie.kb87.net"
+      MEALIE_API_KEY: "${MEALIE_API_KEY}"
+      INVENTAIRE_API_URL: "http://inventaire-familial:8000"
+      SERVICE_API_KEY: "${SERVICE_API_KEY}"
+      VAPID_PUBLIC_KEY: "${VAPID_PUBLIC_KEY}"
+      VAPID_PRIVATE_KEY: "${VAPID_PRIVATE_KEY}"
+      VAPID_CONTACT_EMAIL: "kevin.belleau@gmail.com"
+      MENU_DATA_DIR: "/app/data"
+    volumes:
+      - ./data:/app/data
+    networks:
+      - default
+      - inventaire-net
+
+networks:
+  default:
+    name: menu_hebdo_default
+  inventaire-net:
+    external: true
+    name: inventaire_familial_default
