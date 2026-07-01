@@ -28,6 +28,7 @@ from menu_app.store import (
     list_plans,
     list_sides,
     list_slots_for_plan,
+    list_slots_for_range,
     list_tag_mappings,
     recipe_frequency,
     save_push_subscription,
@@ -106,6 +107,18 @@ def get_week(
     plan = get_or_create_plan(week_start)
     slots = list_slots_for_plan(plan["id"])
     return {"plan": plan, "slots": slots}
+
+
+@app.get("/api/month/{year}/{month}")
+def get_month(
+    year: int,
+    month: int,
+    actor: Actor = Depends(require_permission("menu.read")),
+) -> dict[str, Any]:
+    start = date(year, month, 1)
+    end = date(year, month + 1, 1) - timedelta(days=1) if month < 12 else date(year, 12, 31)
+    slots = list_slots_for_range(start.isoformat(), end.isoformat())
+    return {"slots": slots}
 
 
 @app.put("/api/week/{week_start}/slot/{slot_date}")

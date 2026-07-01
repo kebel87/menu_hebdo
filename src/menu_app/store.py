@@ -233,6 +233,18 @@ def get_slot(slot_id: str) -> dict[str, Any] | None:
         return slot
 
 
+def list_slots_for_range(start_date: str, end_date: str) -> list[dict[str, Any]]:
+    with connect() as db:
+        rows = db.execute(
+            "SELECT * FROM meal_slots WHERE slot_date BETWEEN ? AND ? ORDER BY slot_date",
+            (start_date, end_date),
+        ).fetchall()
+        slots = [_boolify_slot(dict(r)) for r in rows]
+        for slot in slots:
+            slot["sides"] = _get_sides_for_slot(db, slot["id"])
+        return slots
+
+
 def upsert_slot(
     plan_id: str,
     slot_date: str,

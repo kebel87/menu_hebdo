@@ -165,6 +165,11 @@ function addWeeks(d: Date, n: number): Date {
   return r;
 }
 
+function shiftMonth(c: { year: number; month: number }, delta: number): { year: number; month: number } {
+  const d = new Date(c.year, c.month - 1 + delta, 1);
+  return { year: d.getFullYear(), month: d.getMonth() + 1 };
+}
+
 function weekDates(monday: Date): Date[] {
   return Array.from({ length: 7 }, (_, i) => {
     const d = new Date(monday);
@@ -318,6 +323,13 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
   const [pickerDate, setPickerDate] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<"week" | "month">("week");
+  const [monthCursor, setMonthCursor] = useState(() => ({
+    year: today.getFullYear(),
+    month: today.getMonth() + 1,
+  }));
+  const [monthSlots, setMonthSlots] = useState<MealSlot[]>([]);
+  const [showDatePicker, setShowDatePicker] = useState(false);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -343,7 +355,28 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
 
   useEffect(() => { loadWeek(); }, [loadWeek]);
 
+  const loadMonth = useCallback(async () => {
+    try {
+      const data = await api<{ slots: MealSlot[] }>(
+        `/api/month/${monthCursor.year}/${monthCursor.month}`
+      );
+      setMonthSlots(data.slots);
+    } catch {
+      // silent
+    }
+  }, [monthCursor]);
+
+  useEffect(() => {
+    if (viewMode === "month") loadMonth();
+  }, [viewMode, loadMonth]);
+
   const slotByDate = (iso: string) => slots.find((s) => s.slot_date === iso);
+
+  function jumpToDate(iso: string) {
+    setMonday(mondayOf(new Date(iso + "T00:00:00")));
+    setViewMode("week");
+    setShowDatePicker(false);
+  }
 
   async function handleDragEnd(ev: DragEndEvent) {
     setActiveId(null);
@@ -434,20 +467,49 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
   return (
     <div className="week-screen">
       <div className="week-nav">
-        <button onClick={() => setMonday((m) => addWeeks(m, -1))}>
+        <button
+          onClick={() =>
+            viewMode === "week"
+              ? setMonday((m) => addWeeks(m, -1))
+              : setMonthCursor((c) => shiftMonth(c, -1))
+          }
+        >
           <ChevronLeft size={16} />
         </button>
-        <span className="week-label">{fmtWeekLabel(monday)}</span>
-        {!isCurrentWeek && (
+        <button className="week-label" onClick={() => setShowDatePicker(true)}>
+          {viewMode === "week" ? fmtWeekLabel(monday) : `${MONTHS_FR[monthCursor.month - 1]} ${monthCursor.year}`}
+        </button>
+        {viewMode === "week" && !isCurrentWeek && (
           <button className="today-btn" onClick={() => setMonday(mondayOf(today))}>
             Aujourd'hui
           </button>
         )}
-        <button onClick={() => setMonday((m) => addWeeks(m, 1))}>
+        <button
+          onClick={() =>
+            viewMode === "week"
+              ? setMonday((m) => addWeeks(m, 1))
+              : setMonthCursor((c) => shiftMonth(c, 1))
+          }
+        >
           <ChevronRight size={16} />
+        </button>
+        <button
+          className="btn-icon"
+          title={viewMode === "week" ? "Vue mensuelle" : "Vue semaine"}
+          onClick={() => setViewMode((v) => (v === "week" ? "month" : "week"))}
+        >
+          <CalendarDays size={16} />
         </button>
       </div>
 
+      {viewMode === "month" ? (
+        <MonthGrid
+          year={monthCursor.year}
+          month={monthCursor.month}
+          slots={monthSlots}
+          onSelectDay={jumpToDate}
+        />
+      ) : (
       <DndContext
         sensors={sensors}
         onDragStart={(e: DragStartEvent) => setActiveId(e.active.id as string)}
@@ -514,6 +576,7 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
           )}
         </DragOverlay>
       </DndContext>
+      )}
 
       {pickerDate && (
         <RecipePicker
@@ -528,6 +591,104 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
           onClose={() => setPickerDate(null)}
         />
       )}
+
+      {showDatePicker && (
+        <DatePickerModal
+          initialDate={viewMode === "week" ? monday : new Date(monthCursor.year, monthCursor.month - 1, 1)}
+          onSelect={jumpToDate}
+          onClose={() => setShowDatePicker(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── MonthGrid / DatePickerModal ───────────────────────────────────────────────
+
+function MonthGrid({
+  year,
+  month,
+  slots,
+  onSelectDay,
+}: {
+  year: number;
+  month: number;
+  slots: MealSlot[];
+  onSelectDay: (iso: string) => void;
+}) {
+  const slotsByDate = new Map(slots.map((s) => [s.slot_date, s]));
+  const firstWeekday = (new Date(year, month - 1, 1).getDay() + 6) % 7;
+  const daysInMonth = new Date(year, month, 0).getDate();
+  const todayIso = toIso(new Date());
+
+  return (
+    <div className="month-panel">
+      <div className="weekday-row">
+        {DAYS_FR.map((d) => <div key={d}>{d}</div>)}
+      </div>
+      <div className="days-grid">
+        {Array.from({ length: firstWeekday }, (_, i) => (
+          <div key={`blank-${i}`} className="day-cell blank" />
+        ))}
+        {Array.from({ length: daysInMonth }, (_, i) => i + 1).map((day) => {
+          const iso = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+          const slot = slotsByDate.get(iso);
+          return (
+            <button
+              key={iso}
+              type="button"
+              className={`day-cell${slot ? " has-meal" : ""}${iso === todayIso ? " today" : ""}`}
+              onClick={() => onSelectDay(iso)}
+            >
+              <span className="day-number">{day}</span>
+              {slot && <span className="event-label">{slot.recipe_name}</span>}
+              {slot?.makes_lunch && <span className="month-lunch-dot" aria-hidden="true" title="Fait des lunchs" />}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function DatePickerModal({
+  initialDate,
+  onSelect,
+  onClose,
+}: {
+  initialDate: Date;
+  onSelect: (iso: string) => void;
+  onClose: () => void;
+}) {
+  const [cursor, setCursor] = useState({
+    year: initialDate.getFullYear(),
+    month: initialDate.getMonth() + 1,
+  });
+  const [slots, setSlots] = useState<MealSlot[]>([]);
+
+  useEffect(() => {
+    api<{ slots: MealSlot[] }>(`/api/month/${cursor.year}/${cursor.month}`)
+      .then((d) => setSlots(d.slots))
+      .catch(() => setSlots([]));
+  }, [cursor]);
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", alignItems: "center", marginBottom: 12 }}>
+          <button className="btn-icon" onClick={() => setCursor((c) => shiftMonth(c, -1))}>
+            <ChevronLeft size={16} />
+          </button>
+          <span className="modal-title" style={{ flex: 1, textAlign: "center" }}>
+            {MONTHS_FR[cursor.month - 1]} {cursor.year}
+          </span>
+          <button className="btn-icon" onClick={() => setCursor((c) => shiftMonth(c, 1))}>
+            <ChevronRight size={16} />
+          </button>
+          <button className="btn-icon" onClick={onClose}><X size={18} /></button>
+        </div>
+        <MonthGrid year={cursor.year} month={cursor.month} slots={slots} onSelectDay={onSelect} />
+      </div>
     </div>
   );
 }
