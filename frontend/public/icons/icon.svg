@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="96" fill="#1f5f73"/>
-  <rect x="118" y="92" width="276" height="328" rx="32" fill="#f7f8f6"/>
-  <path d="M158 166h196M158 236h196M158 306h132" stroke="#1f5f73" stroke-width="30" stroke-linecap="round"/>
-  <circle cx="346" cy="308" r="26" fill="#e16f5c"/>
+  <rect width="512" height="512" rx="102" fill="#e16f5c"/>
+  <text x="256" y="256" text-anchor="middle" dominant-baseline="central"
+        font-family="Arial Rounded MT Bold, Helvetica Rounded, Arial, sans-serif"
+        font-weight="700" font-size="112" letter-spacing="2" fill="#ffffff">MENUS</text>
 </svg>
