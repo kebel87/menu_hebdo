@@ -23,7 +23,7 @@ services:
       - default
 
   menu-hebdo:
-    build: .
+    image: "${INVENTORY_IMAGE:-ghcr.io/kebel87/menu_hebdo:latest}"
     restart: unless-stopped
     ports:
       - "8091:8000"
