@@ -142,6 +142,9 @@ body {
   transition: box-shadow .15s;
   cursor: pointer;
   flex: 1;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 .day-card:hover { z-index: 1; box-shadow: 0 0 0 1px var(--green); }
 .day-card.dragging-over { background: var(--green-soft); }
