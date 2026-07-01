@@ -207,12 +207,17 @@ def list_plans(limit: int = 52) -> list[dict[str, Any]]:
 # meal_slots
 # ---------------------------------------------------------------------------
 
+def _boolify_slot(slot: dict[str, Any]) -> dict[str, Any]:
+    slot["makes_lunch"] = bool(slot.get("makes_lunch"))
+    return slot
+
+
 def list_slots_for_plan(plan_id: str) -> list[dict[str, Any]]:
     with connect() as db:
         rows = db.execute(
             "SELECT * FROM meal_slots WHERE plan_id = ? ORDER BY slot_date", (plan_id,)
         ).fetchall()
-        slots = [dict(r) for r in rows]
+        slots = [_boolify_slot(dict(r)) for r in rows]
         for slot in slots:
             slot["sides"] = _get_sides_for_slot(db, slot["id"])
         return slots
@@ -223,7 +228,7 @@ def get_slot(slot_id: str) -> dict[str, Any] | None:
         row = db.execute("SELECT * FROM meal_slots WHERE id = ?", (slot_id,)).fetchone()
         if not row:
             return None
-        slot = dict(row)
+        slot = _boolify_slot(dict(row))
         slot["sides"] = _get_sides_for_slot(db, slot_id)
         return slot
 
@@ -270,7 +275,7 @@ def upsert_slot(
             f"menu.slot.{'changed' if existing else 'assigned'}",
             {"slot_date": slot_date, "recipe_name": recipe_name},
         )
-        slot = dict(db.execute("SELECT * FROM meal_slots WHERE id=?", (slot_id,)).fetchone())
+        slot = _boolify_slot(dict(db.execute("SELECT * FROM meal_slots WHERE id=?", (slot_id,)).fetchone()))
         slot["sides"] = _get_sides_for_slot(db, slot_id)
         return slot
 
@@ -309,8 +314,8 @@ def swap_slots(slot_id_a: str, slot_id_b: str, actor_name: str) -> tuple[dict, d
             {"date_a": a["slot_date"], "recipe_a": a["recipe_name"],
              "date_b": b["slot_date"], "recipe_b": b["recipe_name"]},
         )
-        updated_a = dict(db.execute("SELECT * FROM meal_slots WHERE id=?", (slot_id_a,)).fetchone())
-        updated_b = dict(db.execute("SELECT * FROM meal_slots WHERE id=?", (slot_id_b,)).fetchone())
+        updated_a = _boolify_slot(dict(db.execute("SELECT * FROM meal_slots WHERE id=?", (slot_id_a,)).fetchone()))
+        updated_b = _boolify_slot(dict(db.execute("SELECT * FROM meal_slots WHERE id=?", (slot_id_b,)).fetchone()))
         updated_a["sides"] = _get_sides_for_slot(db, slot_id_a)
         updated_b["sides"] = _get_sides_for_slot(db, slot_id_b)
         return updated_a, updated_b

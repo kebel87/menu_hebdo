@@ -281,7 +281,7 @@ function App() {
           {(
             [
               { id: "week", label: "Semaine", icon: <CalendarDays size={14} /> },
-              { id: "recipes", label: "Recettes", icon: <UtensilsCrossed size={14} /> },
+              { id: "recipes", label: "Repas", icon: <UtensilsCrossed size={14} /> },
               { id: "stats", label: "Stats", icon: <BarChart2 size={14} /> },
               { id: "settings", label: "Paramètres", icon: <Settings size={14} /> },
             ] as { id: ViewMode; label: string; icon: React.ReactNode }[]
@@ -688,7 +688,6 @@ function RecipePicker({
         <div className="search-bar">
           <Search size={16} style={{ alignSelf: "center", color: "var(--muted)" }} />
           <input
-            autoFocus
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Rechercher une recette…"
@@ -718,9 +717,6 @@ function RecipePicker({
                 <div key={key} className="recipe-card" onClick={() => onSelect(r)}>
                   <div className="recipe-card-header">
                     <span className="recipe-card-name">{r.name}</span>
-                    <span className={`source-badge ${r.source}`}>
-                      {r.source === "mealie" ? "Mealie" : "Local"}
-                    </span>
                   </div>
                   <div className="recipe-card-meta">
                     {r.makes_lunch && <span className="badge badge-lunch">L</span>}
