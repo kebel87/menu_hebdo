@@ -22,7 +22,6 @@ import {
   X,
   Search,
   RefreshCw,
-  Pencil,
   Trash2,
   CheckCircle,
   Bell,
@@ -316,7 +315,6 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
   const [plan, setPlan] = useState<MealPlan | null>(null);
   const [slots, setSlots] = useState<MealSlot[]>([]);
   const [loading, setLoading] = useState(false);
-  const [expandedDate, setExpandedDate] = useState<string | null>(null);
   const [pickerDate, setPickerDate] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
@@ -461,62 +459,42 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
             const iso = toIso(d);
             const slot = slotByDate(iso);
             const isToday = iso === toIso(today);
-            const expanded = expandedDate === iso;
             const isOver = overId === `drop-${iso}`;
+            const openPicker = () => canEdit && setPickerDate(iso);
 
             return (
               <DroppableCard key={iso} slotDate={iso} isOver={isOver}>
                 <DraggableCard slotDate={iso} slot={slot}>
                   <div
                     className={`day-card-header${isToday ? " today" : ""}`}
-                    onClick={() => {
-                      if (expanded) setExpandedDate(null);
-                      else setExpandedDate(iso);
-                    }}
+                    onClick={openPicker}
                   >
                     <span className="day-name">{DAYS_FR[i]}</span>
                     <span className="day-date">{d.getDate()}</span>
+                    {canEdit && slot && (
+                      <button
+                        className="btn-icon"
+                        style={{ marginLeft: "auto" }}
+                        onClick={(e) => { e.stopPropagation(); handleClear(iso); }}
+                        title="Retirer"
+                      >
+                        <X size={13} />
+                      </button>
+                    )}
+                  </div>
+                  <div className={`day-card-body${!slot ? " empty" : ""}`} onClick={openPicker}>
+                    <span className="meal-name">
+                      {slot ? slot.recipe_name : "— "}
+                    </span>
                     <div className="day-badges">
-                      {slot?.makes_lunch && <span className="badge badge-lunch">L</span>}
+                      {slot?.makes_lunch && <span className="badge badge-lunch">Lunch</span>}
                       {slot && slot.inventory_score?.score !== undefined && (
                         <span className={`badge ${scoreClass(slot.inventory_score?.score)}`}>
                           {scoreLabel(slot.inventory_score?.score)}
                         </span>
                       )}
                     </div>
-                    {canEdit && (
-                      <div style={{ display: "flex", gap: 2, marginLeft: "auto" }}>
-                        <button
-                          className="btn-icon"
-                          onClick={(e) => { e.stopPropagation(); setPickerDate(iso); }}
-                          title="Choisir un repas"
-                        >
-                          <Pencil size={13} />
-                        </button>
-                        {slot && (
-                          <button
-                            className="btn-icon"
-                            onClick={(e) => { e.stopPropagation(); handleClear(iso); }}
-                            title="Retirer"
-                          >
-                            <X size={13} />
-                          </button>
-                        )}
-                      </div>
-                    )}
                   </div>
-                  <div className={`day-card-body${!slot ? " empty" : ""}`}>
-                    <span className="meal-name">
-                      {slot ? slot.recipe_name : "— "}
-                    </span>
-                  </div>
-                  {expanded && slot && (
-                    <SidesPanel
-                      slot={slot}
-                      canEdit={canEdit}
-                      onUpdate={(sides) => handleSidesUpdate(slot.id, sides)}
-                    />
-                  )}
                 </DraggableCard>
               </DroppableCard>
             );
@@ -540,7 +518,13 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
       {pickerDate && (
         <RecipePicker
           date={pickerDate}
+          slot={slotByDate(pickerDate)}
+          canEdit={canEdit}
           onSelect={(r) => handleAssign(pickerDate, r)}
+          onSidesUpdate={(sides) => {
+            const slot = slotByDate(pickerDate);
+            if (slot) handleSidesUpdate(slot.id, sides);
+          }}
           onClose={() => setPickerDate(null)}
         />
       )}
@@ -640,11 +624,17 @@ function SidesPanel({
 
 function RecipePicker({
   date,
+  slot,
+  canEdit,
   onSelect,
+  onSidesUpdate,
   onClose,
 }: {
   date: string;
+  slot?: MealSlot;
+  canEdit: boolean;
   onSelect: (r: Recipe) => void;
+  onSidesUpdate: (sides: SlotSide[]) => void;
   onClose: () => void;
 }) {
   const [recipes, setRecipes] = useState<Recipe[]>([]);
@@ -685,6 +675,9 @@ function RecipePicker({
           </span>
           <button className="btn-icon" onClick={onClose}><X size={18} /></button>
         </div>
+        {slot && (
+          <SidesPanel slot={slot} canEdit={canEdit} onUpdate={onSidesUpdate} />
+        )}
         <div className="search-bar">
           <Search size={16} style={{ alignSelf: "center", color: "var(--muted)" }} />
           <input
@@ -719,8 +712,8 @@ function RecipePicker({
                     <span className="recipe-card-name">{r.name}</span>
                   </div>
                   <div className="recipe-card-meta">
-                    {r.makes_lunch && <span className="badge badge-lunch">L</span>}
-                    {r.is_weekend && <span className="badge badge-weekend">WE</span>}
+                    {r.makes_lunch && <span className="badge badge-lunch">Lunch</span>}
+                    {r.is_weekend && <span className="badge badge-weekend">Weekend</span>}
                     {r.prep_minutes && (
                       <span className="recipe-last">{r.prep_minutes} min</span>
                     )}
@@ -819,8 +812,8 @@ function RecipesScreen({ canEdit }: { canEdit: boolean }) {
                   </span>
                 </div>
                 <div className="recipe-card-meta">
-                  {r.makes_lunch && <span className="badge badge-lunch">L</span>}
-                  {r.is_weekend && <span className="badge badge-weekend">WE</span>}
+                  {r.makes_lunch && <span className="badge badge-lunch">Lunch</span>}
+                  {r.is_weekend && <span className="badge badge-weekend">Weekend</span>}
                   {r.prep_minutes && (
                     <span className="recipe-last">{r.prep_minutes} min</span>
                   )}
