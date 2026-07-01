@@ -19,7 +19,7 @@ services:
       OAUTH2_PROXY_PASS_ACCESS_TOKEN: "false"
       OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
       OAUTH2_PROXY_HTTP_ADDRESS: "0.0.0.0:4180"
-      OAUTH2_PROXY_SKIP_AUTH_ROUTES: "^/manifest.webmanifest$,^/icons/.*"
+      OAUTH2_PROXY_SKIP_AUTH_ROUTES: "^/manifest.webmanifest$,^/sw.js$,^/icons/.*"
     networks:
       - default
 
