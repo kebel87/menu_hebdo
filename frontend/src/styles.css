@@ -259,10 +259,26 @@ body {
 }
 .day-card-body.empty .meal-name { color: var(--muted); font-style: italic; }
 
-.meal-name {
+.meal-info {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.meal-name {
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.meal-sides {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -322,8 +338,8 @@ body {
   flex: 1;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  padding: 4px 8px;
-  font-size: 12px;
+  padding: 6px 8px;
+  font-size: 16px;
   background: var(--panel);
 }
 .sides-add button {
@@ -349,7 +365,7 @@ body {
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   padding: 8px 12px;
-  font-size: 14px;
+  font-size: 16px;
   background: var(--panel);
 }
 .search-bar input:focus { outline: none; border-color: var(--green); }
@@ -461,7 +477,7 @@ body {
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   padding: 8px 10px;
-  font-size: 14px;
+  font-size: 16px;
   background: var(--panel);
 }
 .form-row input:focus, .form-row select:focus { outline: none; border-color: var(--green); }

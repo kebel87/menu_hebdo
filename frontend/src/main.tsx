@@ -545,9 +545,16 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
                     )}
                   </div>
                   <div className={`day-card-body${!slot ? " empty" : ""}`} onClick={openPicker}>
-                    <span className="meal-name">
-                      {slot ? slot.recipe_name : "— "}
-                    </span>
+                    <div className="meal-info">
+                      <span className="meal-name">
+                        {slot ? slot.recipe_name : "— "}
+                      </span>
+                      {slot && slot.sides.length > 0 && (
+                        <span className="meal-sides">
+                          {slot.sides.map((s) => s.name).join(", ")}
+                        </span>
+                      )}
+                    </div>
                     <div className="day-badges">
                       {slot?.makes_lunch && <span className="badge badge-lunch">Lunch</span>}
                       {slot && slot.inventory_score?.score !== undefined && (
