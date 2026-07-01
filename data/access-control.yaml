@@ -18,9 +18,11 @@ roles:
 groups: []
 
 users:
-  - email: kevin.belleau@gmail.com
+  - subject: be4bb226-0d89-4b59-bd49-03f93bcb5fa8
+    email: k_belleau@hotmail.com
     display_name: Kevin Belleau
     roles: [admin]
-  - email: amelizotte@gmail.com
+  - subject: ed9e03f1-08ed-470b-be0c-2fbf1c846780
+    email: amelizotte@gmail.com
     display_name: Amélie Lizotte
     roles: [editor]
