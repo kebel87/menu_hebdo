@@ -51,6 +51,13 @@ def initialize_database() -> None:
                 (SCHEMA_VERSION,),
             )
             _seed(db)
+        _apply_migrations(db)
+
+
+def _apply_migrations(db: sqlite3.Connection) -> None:
+    existing = {row[1] for row in db.execute("PRAGMA table_info(recipe_meta)").fetchall()}
+    if "is_hidden" not in existing:
+        db.execute("ALTER TABLE recipe_meta ADD COLUMN is_hidden INTEGER NOT NULL DEFAULT 0")
 
 
 def _create_tables(db: sqlite3.Connection) -> None:
@@ -113,6 +120,7 @@ def _create_tables(db: sqlite3.Connection) -> None:
             mealie_slug TEXT PRIMARY KEY,
             is_weekend INTEGER NOT NULL DEFAULT 0,
             makes_lunch INTEGER NOT NULL DEFAULT 0,
+            is_hidden INTEGER NOT NULL DEFAULT 0,
             notes TEXT NOT NULL DEFAULT '',
             updated_at TEXT NOT NULL
         );
@@ -471,13 +479,14 @@ def get_recipe_meta(mealie_slug: str) -> dict[str, Any]:
         ).fetchone()
         if row:
             return dict(row)
-        return {"mealie_slug": mealie_slug, "is_weekend": 0, "makes_lunch": 0, "notes": ""}
+        return {"mealie_slug": mealie_slug, "is_weekend": 0, "makes_lunch": 0, "is_hidden": 0, "notes": ""}
 
 
 def upsert_recipe_meta(
     mealie_slug: str,
     is_weekend: bool | None = None,
     makes_lunch: bool | None = None,
+    is_hidden: bool | None = None,
     notes: str | None = None,
 ) -> dict[str, Any]:
     with connect() as db:
@@ -491,6 +500,8 @@ def upsert_recipe_meta(
                 updates.append(("is_weekend", int(is_weekend)))
             if makes_lunch is not None:
                 updates.append(("makes_lunch", int(makes_lunch)))
+            if is_hidden is not None:
+                updates.append(("is_hidden", int(is_hidden)))
             if notes is not None:
                 updates.append(("notes", notes))
             if updates:
@@ -501,9 +512,16 @@ def upsert_recipe_meta(
                 )
         else:
             db.execute(
-                """INSERT INTO recipe_meta (mealie_slug, is_weekend, makes_lunch, notes, updated_at)
-                   VALUES (?,?,?,?,?)""",
-                (mealie_slug, int(is_weekend or False), int(makes_lunch or False), notes or "", now),
+                """INSERT INTO recipe_meta (mealie_slug, is_weekend, makes_lunch, is_hidden, notes, updated_at)
+                   VALUES (?,?,?,?,?,?)""",
+                (
+                    mealie_slug,
+                    int(is_weekend or False),
+                    int(makes_lunch or False),
+                    int(is_hidden or False),
+                    notes or "",
+                    now,
+                ),
             )
         row = db.execute("SELECT * FROM recipe_meta WHERE mealie_slug=?", (mealie_slug,)).fetchone()
         return dict(row)

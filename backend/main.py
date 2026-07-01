@@ -275,6 +275,7 @@ def api_delete_local_recipe(
 
 @app.get("/api/recipes")
 def api_recipes(
+    include_hidden: bool = False,
     actor: Actor = Depends(require_permission("menu.read")),
 ) -> list[dict[str, Any]]:
     inventory = get_inventory()
@@ -290,6 +291,7 @@ def api_recipes(
             "tags": r.get("tags", []),
             "is_weekend": bool(r.get("is_weekend")),
             "makes_lunch": bool(r.get("makes_lunch")),
+            "is_hidden": False,
             "prep_minutes": r.get("prep_minutes"),
             "notes": r.get("notes", ""),
             "inventory_score": score_data,
@@ -301,6 +303,8 @@ def api_recipes(
             for r in mealie_recipes:
                 slug = r.get("slug", "")
                 meta = get_recipe_meta(slug)
+                if meta.get("is_hidden") and not include_hidden:
+                    continue
                 tags_raw = [
                     t["name"] if isinstance(t, dict) else t
                     for t in r.get("tags", [])
@@ -314,6 +318,7 @@ def api_recipes(
                     "tags": tags_raw,
                     "is_weekend": bool(meta.get("is_weekend")),
                     "makes_lunch": bool(meta.get("makes_lunch")),
+                    "is_hidden": bool(meta.get("is_hidden")),
                     "prep_minutes": _extract_prep(r),
                     "notes": meta.get("notes", ""),
                     "image": r.get("image"),
@@ -350,6 +355,7 @@ def api_update_mealie_meta(
         slug,
         is_weekend=body.get("is_weekend"),
         makes_lunch=body.get("makes_lunch"),
+        is_hidden=body.get("is_hidden"),
         notes=body.get("notes"),
     )
 

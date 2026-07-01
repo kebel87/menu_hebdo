@@ -81,6 +81,7 @@ interface Recipe {
   tags: string[];
   is_weekend: boolean;
   makes_lunch: boolean;
+  is_hidden: boolean;
   prep_minutes?: number;
   notes: string;
   image?: string;
@@ -748,7 +749,7 @@ function RecipesScreen({ canEdit }: { canEdit: boolean }) {
   const [showAddLocal, setShowAddLocal] = useState(false);
 
   useEffect(() => {
-    api<Recipe[]>("/api/recipes")
+    api<Recipe[]>("/api/recipes?include_hidden=true")
       .then(setRecipes)
       .finally(() => setLoading(false));
   }, []);
@@ -761,7 +762,9 @@ function RecipesScreen({ canEdit }: { canEdit: boolean }) {
     });
   }
 
+  const showHidden = filters.has("masquees");
   const filtered = recipes.filter((r) => {
+    if (r.is_hidden !== showHidden) return false;
     if (q && !r.name.toLowerCase().includes(q.toLowerCase())) return false;
     if (filters.has("weekend") && !r.is_weekend) return false;
     if (filters.has("lunchs") && !r.makes_lunch) return false;
@@ -786,13 +789,13 @@ function RecipesScreen({ canEdit }: { canEdit: boolean }) {
         )}
       </div>
       <div className="filter-chips">
-        {["dispo", "weekend", "lunchs", "rapide"].map((f) => (
+        {["dispo", "weekend", "lunchs", "rapide", "masquees"].map((f) => (
           <button
             key={f}
             className={`filter-chip${filters.has(f) ? " active" : ""}`}
             onClick={() => toggleFilter(f)}
           >
-            {f === "dispo" ? "Disponible" : f === "lunchs" ? "Fait des lunchs" : f === "rapide" ? "< 30 min" : "Week-end"}
+            {f === "dispo" ? "Disponible" : f === "lunchs" ? "Fait des lunchs" : f === "rapide" ? "< 30 min" : f === "masquees" ? "Masquées" : "Week-end"}
           </button>
         ))}
       </div>
@@ -885,6 +888,7 @@ function RecipeDetailModal({
 }) {
   const [isWeekend, setIsWeekend] = useState(recipe.is_weekend);
   const [makesLunch, setMakesLunch] = useState(recipe.makes_lunch);
+  const [isHidden, setIsHidden] = useState(recipe.is_hidden);
   const [saving, setSaving] = useState(false);
 
   async function save() {
@@ -893,9 +897,9 @@ function RecipeDetailModal({
       if (recipe.source === "mealie" && recipe.slug) {
         await api(`/api/recipes/mealie/${recipe.slug}/meta`, {
           method: "PATCH",
-          body: JSON.stringify({ is_weekend: isWeekend, makes_lunch: makesLunch }),
+          body: JSON.stringify({ is_weekend: isWeekend, makes_lunch: makesLunch, is_hidden: isHidden }),
         });
-        onUpdated({ ...recipe, is_weekend: isWeekend, makes_lunch: makesLunch });
+        onUpdated({ ...recipe, is_weekend: isWeekend, makes_lunch: makesLunch, is_hidden: isHidden });
       } else if (recipe.source === "local" && recipe.id) {
         const updated = await api<Recipe>(`/api/local-recipes/${recipe.id}`, {
           method: "PATCH",
@@ -966,6 +970,19 @@ function RecipeDetailModal({
                 Fait des lunchs le lendemain
               </label>
             </div>
+            {recipe.source === "mealie" && (
+              <div className="form-row">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={isHidden}
+                    onChange={(e) => setIsHidden(e.target.checked)}
+                    style={{ marginRight: 6 }}
+                  />
+                  Masquer cette recette (n'apparaît plus dans l'onglet Recettes ni le choix de repas)
+                </label>
+              </div>
+            )}
             <div className="form-actions">
               {recipe.source === "local" && (
                 <button className="btn btn-danger" onClick={handleDelete}>
@@ -1025,7 +1042,7 @@ function LocalRecipeModal({
           body: JSON.stringify(body),
         });
       }
-      onSaved({ ...r, source: "local" });
+      onSaved({ ...r, source: "local", is_hidden: false });
     } finally {
       setSaving(false);
     }
