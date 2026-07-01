@@ -37,7 +37,7 @@ def get_inventory(force: bool = False) -> list[dict[str, Any]]:
                 timeout=5,
             )
             resp.raise_for_status()
-            items.extend(resp.json())
+            items.extend(resp.json().get("items", []))
         _cache = items
         _cache_at = time.time()
     except Exception:
