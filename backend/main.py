@@ -48,6 +48,7 @@ from menu_app.store import (
 from .auth import Actor, current_actor, require_permission
 from .mealie_client import get_recipes, get_recipe, get_mealie_tags, is_configured as mealie_ok
 from .inventory_client import get_inventory, inventory_score, is_configured as inv_ok
+from . import calendar_client
 from .notifications import (
     flush_notifications,
     get_vapid_public_key,
@@ -157,6 +158,24 @@ def _resolve_mealie_slot_tags(slots: list[dict[str, Any]]) -> None:
         slot["tags"] = _canonical_tags_for_mealie_recipe(recipe, canonical_by_id, canonical_id_by_mealie_name)
 
 
+def _week_presence(week_start: str) -> dict[str, Any]:
+    """Presence des enfants (via calendrier_familiale) pour chacun des 7 jours
+    de la semaine. Dict vide si le calendrier n'est pas configure/joignable."""
+    if not calendar_client.is_configured():
+        return {}
+    try:
+        start = date.fromisoformat(week_start)
+    except ValueError:
+        return {}
+    presence: dict[str, Any] = {}
+    for i in range(7):
+        iso_day = (start + timedelta(days=i)).isoformat()
+        day_presence = calendar_client.get_presence(iso_day)
+        if day_presence is not None:
+            presence[iso_day] = day_presence
+    return presence
+
+
 @app.get("/api/week/{week_start}")
 def get_week(
     week_start: str,
@@ -165,7 +184,13 @@ def get_week(
     plan = get_or_create_plan(week_start)
     slots = list_slots_for_plan(plan["id"])
     _resolve_mealie_slot_tags(slots)
-    return {"plan": plan, "slots": slots}
+    return {"plan": plan, "slots": slots, "presence": _week_presence(week_start)}
+
+
+@app.get("/api/children")
+def api_children(actor: Actor = Depends(require_permission("menu.read"))) -> list[dict[str, Any]]:
+    """Liste des enfants (id, name, short_label), source: calendrier_familiale."""
+    return calendar_client.get_children()
 
 
 @app.get("/api/month/{year}/{month}")
@@ -341,6 +366,7 @@ def api_create_local_recipe(
         name=name,
         ingredients=body.get("ingredients"),
         tag_ids=body.get("tag_ids"),
+        liked_by=body.get("liked_by"),
         is_weekend=body.get("is_weekend", False),
         makes_lunch=body.get("makes_lunch", False),
         prep_minutes=body.get("prep_minutes"),
@@ -386,6 +412,7 @@ def _build_recipe_list(include_hidden: bool) -> list[dict[str, Any]]:
             "name": r["name"],
             "tags": r.get("tags", []),
             "tag_ids": r.get("tag_ids", []),
+            "liked_by": r.get("liked_by", []),
             "is_weekend": bool(r.get("is_weekend")),
             "makes_lunch": bool(r.get("makes_lunch")),
             "is_hidden": False,
@@ -413,6 +440,7 @@ def _build_recipe_list(include_hidden: bool) -> list[dict[str, Any]]:
                     "slug": slug,
                     "name": r.get("name", slug),
                     "tags": tags,
+                    "liked_by": meta.get("liked_by", []),
                     "is_weekend": bool(meta.get("is_weekend")),
                     "makes_lunch": bool(meta.get("makes_lunch")),
                     "is_hidden": bool(meta.get("is_hidden")),
@@ -435,17 +463,43 @@ def api_recipes(
     return _build_recipe_list(include_hidden)
 
 
+def _present_children_for_date(iso_date: str | None) -> set[str]:
+    if not iso_date or not calendar_client.is_configured():
+        return set()
+    presence = calendar_client.get_presence(iso_date)
+    if not presence:
+        return set()
+    return set(presence.get("presentChildren", []))
+
+
+def _recipe_key(r: dict[str, Any]) -> tuple[str, str | None]:
+    return (r["source"], r.get("slug") or r.get("id"))
+
+
 @app.get("/api/recipes/favorites")
 def api_recipe_favorites(
     limit: int = 8,
+    date: str | None = None,
     actor: Actor = Depends(require_permission("menu.read")),
 ) -> list[dict[str, Any]]:
-    """Recettes les plus fréquemment planifiées (12 dernières semaines)."""
+    """Recettes les plus fréquemment planifiées (12 dernières semaines).
+
+    Si `date` est fourni, les recettes aimées par au moins un enfant present
+    ce jour-la (garde partagee, via calendrier_familiale) remontent en tete,
+    sans changer l'ordre relatif issu de la frequence."""
     freq = recipe_frequency(weeks=12)
     order = {f["recipe_name"]: i for i, f in enumerate(freq)}
     all_recipes = _build_recipe_list(include_hidden=False)
     favorites = [r for r in all_recipes if r["name"] in order]
     favorites.sort(key=lambda r: order[r["name"]])
+
+    present = _present_children_for_date(date)
+    if present:
+        liked_keys = {
+            _recipe_key(r) for r in favorites if set(r.get("liked_by", [])) & present
+        }
+        favorites.sort(key=lambda r: 0 if _recipe_key(r) in liked_keys else 1)
+
     return favorites[:limit]
 
 
@@ -476,6 +530,7 @@ def api_update_mealie_meta(
         makes_lunch=body.get("makes_lunch"),
         is_hidden=body.get("is_hidden"),
         notes=body.get("notes"),
+        liked_by=body.get("liked_by"),
     )
 
 

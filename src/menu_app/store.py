@@ -66,6 +66,12 @@ def _apply_migrations(db: sqlite3.Connection) -> None:
         db.execute("ALTER TABLE canonical_tags ADD COLUMN is_filter INTEGER NOT NULL DEFAULT 0")
         db.execute("UPDATE canonical_tags SET is_filter=1 WHERE name IN ('weekend', 'lunchs')")
         _backfill_weekend_lunch_tags(db)
+    local_cols = {row[1] for row in db.execute("PRAGMA table_info(local_recipes)").fetchall()}
+    if "liked_by_json" not in local_cols:
+        db.execute("ALTER TABLE local_recipes ADD COLUMN liked_by_json TEXT NOT NULL DEFAULT '[]'")
+    meta_cols = {row[1] for row in db.execute("PRAGMA table_info(recipe_meta)").fetchall()}
+    if "liked_by_json" not in meta_cols:
+        db.execute("ALTER TABLE recipe_meta ADD COLUMN liked_by_json TEXT NOT NULL DEFAULT '[]'")
 
 
 def _backfill_weekend_lunch_tags(db: sqlite3.Connection) -> None:
@@ -511,6 +517,7 @@ def create_local_recipe(
     name: str,
     ingredients: list[dict] | None = None,
     tag_ids: list[str] | None = None,
+    liked_by: list[str] | None = None,
     is_weekend: bool = False,
     makes_lunch: bool = False,
     prep_minutes: int | None = None,
@@ -521,12 +528,13 @@ def create_local_recipe(
         now = now_iso()
         db.execute(
             """INSERT INTO local_recipes
-               (id, name, ingredients_json, tags_json, is_weekend, makes_lunch,
+               (id, name, ingredients_json, tags_json, liked_by_json, is_weekend, makes_lunch,
                 prep_minutes, notes, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (recipe_id, name.strip(),
              json.dumps(ingredients or []),
              json.dumps(tag_ids or []),
+             json.dumps(liked_by or []),
              int(is_weekend), int(makes_lunch),
              prep_minutes, notes, now, now),
         )
@@ -537,7 +545,7 @@ def create_local_recipe(
 def update_local_recipe(recipe_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     with connect() as db:
         now = now_iso()
-        allowed = {"name", "ingredients_json", "tags_json", "is_weekend",
+        allowed = {"name", "ingredients_json", "tags_json", "liked_by_json", "is_weekend",
                    "makes_lunch", "prep_minutes", "notes"}
         updates: list[tuple[str, Any]] = []
         for key, val in payload.items():
@@ -545,6 +553,8 @@ def update_local_recipe(recipe_id: str, payload: dict[str, Any]) -> dict[str, An
                 updates.append(("ingredients_json", json.dumps(val)))
             elif key == "tag_ids" and isinstance(val, list):
                 updates.append(("tags_json", json.dumps(val)))
+            elif key == "liked_by" and isinstance(val, list):
+                updates.append(("liked_by_json", json.dumps(val)))
             elif key in allowed:
                 updates.append((key, val))
         if updates:
@@ -572,6 +582,7 @@ def _parse_local_recipe(r: dict, tags_map: dict[str, dict[str, Any]]) -> dict:
     tag_ids = json.loads(r.get("tags_json") or "[]")
     r["tag_ids"] = tag_ids
     r["tags"] = [tags_map[i] for i in tag_ids if i in tags_map]
+    r["liked_by"] = json.loads(r.get("liked_by_json") or "[]")
     return r
 
 
@@ -579,14 +590,20 @@ def _parse_local_recipe(r: dict, tags_map: dict[str, dict[str, Any]]) -> dict:
 # recipe_meta (métadonnées famille sur les recettes Mealie)
 # ---------------------------------------------------------------------------
 
+def _parse_recipe_meta(r: dict) -> dict:
+    r["liked_by"] = json.loads(r.get("liked_by_json") or "[]")
+    return r
+
+
 def get_recipe_meta(mealie_slug: str) -> dict[str, Any]:
     with connect() as db:
         row = db.execute(
             "SELECT * FROM recipe_meta WHERE mealie_slug=?", (mealie_slug,)
         ).fetchone()
         if row:
-            return dict(row)
-        return {"mealie_slug": mealie_slug, "is_weekend": 0, "makes_lunch": 0, "is_hidden": 0, "notes": ""}
+            return _parse_recipe_meta(dict(row))
+        return {"mealie_slug": mealie_slug, "is_weekend": 0, "makes_lunch": 0, "is_hidden": 0,
+                "notes": "", "liked_by": []}
 
 
 def upsert_recipe_meta(
@@ -595,6 +612,7 @@ def upsert_recipe_meta(
     makes_lunch: bool | None = None,
     is_hidden: bool | None = None,
     notes: str | None = None,
+    liked_by: list[str] | None = None,
 ) -> dict[str, Any]:
     with connect() as db:
         now = now_iso()
@@ -611,6 +629,8 @@ def upsert_recipe_meta(
                 updates.append(("is_hidden", int(is_hidden)))
             if notes is not None:
                 updates.append(("notes", notes))
+            if liked_by is not None:
+                updates.append(("liked_by_json", json.dumps(liked_by)))
             if updates:
                 set_clause = ", ".join(f"{k}=?" for k, _ in updates)
                 values = [v for _, v in updates] + [now, mealie_slug]
@@ -619,19 +639,21 @@ def upsert_recipe_meta(
                 )
         else:
             db.execute(
-                """INSERT INTO recipe_meta (mealie_slug, is_weekend, makes_lunch, is_hidden, notes, updated_at)
-                   VALUES (?,?,?,?,?,?)""",
+                """INSERT INTO recipe_meta
+                   (mealie_slug, is_weekend, makes_lunch, is_hidden, notes, liked_by_json, updated_at)
+                   VALUES (?,?,?,?,?,?,?)""",
                 (
                     mealie_slug,
                     int(is_weekend or False),
                     int(makes_lunch or False),
                     int(is_hidden or False),
                     notes or "",
+                    json.dumps(liked_by or []),
                     now,
                 ),
             )
         row = db.execute("SELECT * FROM recipe_meta WHERE mealie_slug=?", (mealie_slug,)).fetchone()
-        return dict(row)
+        return _parse_recipe_meta(dict(row))
 
 
 # ---------------------------------------------------------------------------

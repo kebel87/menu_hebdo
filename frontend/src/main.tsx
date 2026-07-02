@@ -80,6 +80,20 @@ interface MealPlan {
   created_at: string;
 }
 
+interface Child {
+  id: string;
+  name: string;
+  short_label: string;
+}
+
+interface DayPresence {
+  date: string;
+  presentChildren: string[];
+  presence: Record<string, boolean>;
+  anyonePresent: boolean;
+  everyonePresent: boolean;
+}
+
 interface Recipe {
   source: "mealie" | "local";
   id?: string;
@@ -87,6 +101,7 @@ interface Recipe {
   name: string;
   tags: CanonicalTag[];
   tag_ids?: string[];
+  liked_by: string[];
   is_weekend: boolean;
   makes_lunch: boolean;
   is_hidden: boolean;
@@ -180,6 +195,14 @@ function useFilterableTags(): CanonicalTag[] {
 
 function hasTag(r: Recipe, tagId: string): boolean {
   return r.tags.some((t) => t.id === tagId);
+}
+
+function useChildren(): Child[] {
+  const [children, setChildren] = useState<Child[]>([]);
+  useEffect(() => {
+    api<Child[]>("/api/children").then(setChildren).catch(() => {});
+  }, []);
+  return children;
 }
 
 function mondayOf(d: Date): Date {
@@ -292,6 +315,31 @@ function DroppableCard({
   );
 }
 
+function PresenceBadge({
+  dayPresence,
+  allChildren,
+}: {
+  dayPresence?: DayPresence;
+  allChildren: Child[];
+}) {
+  if (!dayPresence || dayPresence.presentChildren.length === 0) return null;
+  if (dayPresence.everyonePresent) {
+    return <span className="presence-tag presence-tag-all">Tous</span>;
+  }
+  return (
+    <span className="presence-tags">
+      {dayPresence.presentChildren.map((childId) => {
+        const child = allChildren.find((c) => c.id === childId);
+        return (
+          <span key={childId} className="presence-tag" title={child?.name ?? childId}>
+            {child?.short_label ?? childId[0]?.toUpperCase()}
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
 // ─── App ──────────────────────────────────────────────────────────────────────
 
 function App() {
@@ -355,7 +403,9 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
   const [monday, setMonday] = useState<Date>(() => mondayOf(today));
   const [plan, setPlan] = useState<MealPlan | null>(null);
   const [slots, setSlots] = useState<MealSlot[]>([]);
+  const [presence, setPresence] = useState<Record<string, DayPresence>>({});
   const [loading, setLoading] = useState(false);
+  const children = useChildren();
   const [dayActionDate, setDayActionDate] = useState<string | null>(null);
   const [wizard, setWizard] = useState<{ date: string; mode: WizardMode } | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -380,9 +430,12 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
   const loadWeek = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await api<{ plan: MealPlan; slots: MealSlot[] }>(`/api/week/${weekStart}`);
+      const data = await api<{ plan: MealPlan; slots: MealSlot[]; presence?: Record<string, DayPresence> }>(
+        `/api/week/${weekStart}`
+      );
       setPlan(data.plan);
       setSlots(data.slots);
+      setPresence(data.presence ?? {});
     } catch {
       // silent
     } finally {
@@ -567,6 +620,7 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
                   >
                     <span className="day-name">{DAYS_FR[i]}</span>
                     <span className="day-date">{d.getDate()}</span>
+                    <PresenceBadge dayPresence={presence[iso]} allChildren={children} />
                     {canEdit && slot && (
                       <button
                         className="btn-icon"
@@ -961,8 +1015,8 @@ function MealWizard({
     api<Recipe[]>("/api/recipes")
       .then(setRecipes)
       .finally(() => setLoading(false));
-    api<Recipe[]>("/api/recipes/favorites").then(setFavorites).catch(() => {});
-  }, [mode]);
+    api<Recipe[]>(`/api/recipes/favorites?date=${encodeURIComponent(date)}`).then(setFavorites).catch(() => {});
+  }, [mode, date]);
 
   function toggleFilter(f: string) {
     setFilters((prev) => {
@@ -1301,6 +1355,8 @@ function RecipeDetailModal({
   const [isHidden, setIsHidden] = useState(recipe.is_hidden);
   const [tagIds, setTagIds] = useState<string[]>(recipe.tag_ids ?? []);
   const [allTags, setAllTags] = useState<CanonicalTag[]>([]);
+  const [likedBy, setLikedBy] = useState<string[]>(recipe.liked_by ?? []);
+  const allChildren = useChildren();
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -1310,15 +1366,21 @@ function RecipeDetailModal({
       .catch(() => {});
   }, [recipe.source]);
 
+  function toggleLikedBy(childId: string) {
+    setLikedBy((prev) => prev.includes(childId) ? prev.filter((c) => c !== childId) : [...prev, childId]);
+  }
+
   async function save() {
     setSaving(true);
     try {
       if (recipe.source === "mealie" && recipe.slug) {
         await api(`/api/recipes/mealie/${recipe.slug}/meta`, {
           method: "PATCH",
-          body: JSON.stringify({ is_weekend: isWeekend, makes_lunch: makesLunch, is_hidden: isHidden }),
+          body: JSON.stringify({
+            is_weekend: isWeekend, makes_lunch: makesLunch, is_hidden: isHidden, liked_by: likedBy,
+          }),
         });
-        onUpdated({ ...recipe, is_weekend: isWeekend, makes_lunch: makesLunch, is_hidden: isHidden });
+        onUpdated({ ...recipe, is_weekend: isWeekend, makes_lunch: makesLunch, is_hidden: isHidden, liked_by: likedBy });
       } else if (recipe.source === "local" && recipe.id) {
         const updated = await api<Recipe>(`/api/local-recipes/${recipe.id}`, {
           method: "PATCH",
@@ -1328,6 +1390,7 @@ function RecipeDetailModal({
             is_weekend: isWeekend,
             makes_lunch: makesLunch,
             tag_ids: tagIds,
+            liked_by: likedBy,
           }),
         });
         onUpdated({ ...recipe, ...updated, source: "local" });
@@ -1440,6 +1503,23 @@ function RecipeDetailModal({
                 </select>
               </div>
             )}
+            {allChildren.length > 0 && (
+              <div className="form-row">
+                <label>Aimé par</label>
+                <div className="filter-chips">
+                  {allChildren.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      className={`filter-chip${likedBy.includes(c.id) ? " active" : ""}`}
+                      onClick={() => toggleLikedBy(c.id)}
+                    >
+                      {c.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             {recipe.source === "mealie" && (
               <div className="form-row">
                 <label>
@@ -1493,6 +1573,8 @@ function LocalRecipeModal({
   const [notes, setNotes] = useState(recipe?.notes ?? "");
   const [tagIds, setTagIds] = useState<string[]>(recipe?.tag_ids ?? []);
   const [allTags, setAllTags] = useState<CanonicalTag[]>([]);
+  const [likedBy, setLikedBy] = useState<string[]>(recipe?.liked_by ?? []);
+  const allChildren = useChildren();
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -1500,6 +1582,10 @@ function LocalRecipeModal({
       .then((t) => setAllTags([...t].sort((a, b) => a.name.localeCompare(b.name))))
       .catch(() => {});
   }, []);
+
+  function toggleLikedBy(childId: string) {
+    setLikedBy((prev) => prev.includes(childId) ? prev.filter((c) => c !== childId) : [...prev, childId]);
+  }
 
   async function save() {
     if (!name.trim()) return;
@@ -1512,6 +1598,7 @@ function LocalRecipeModal({
         prep_minutes: prep ? parseInt(prep) : null,
         notes,
         tag_ids: tagIds,
+        liked_by: likedBy,
       };
       let r: Recipe;
       if (recipe?.id) {
@@ -1573,6 +1660,23 @@ function LocalRecipeModal({
             ))}
           </select>
         </div>
+        {allChildren.length > 0 && (
+          <div className="form-row">
+            <label>Aimé par</label>
+            <div className="filter-chips">
+              {allChildren.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  className={`filter-chip${likedBy.includes(c.id) ? " active" : ""}`}
+                  onClick={() => toggleLikedBy(c.id)}
+                >
+                  {c.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         <div className="form-row">
           <label>Notes</label>
           <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} />

@@ -34,6 +34,8 @@ services:
       MEALIE_API_KEY: "${MEALIE_API_KEY}"
       INVENTAIRE_API_URL: "http://inventaire-familial:8000"
       SERVICE_API_KEY: "${SERVICE_API_KEY}"
+      CALENDAR_API_URL: "${CALENDAR_API_URL:-https://calendrier.kb87.net}"
+      CALENDAR_API_TOKEN: "${CALENDAR_API_TOKEN:-}"
       VAPID_PUBLIC_KEY: "${VAPID_PUBLIC_KEY}"
       VAPID_PRIVATE_KEY: "${VAPID_PRIVATE_KEY}"
       VAPID_CONTACT_EMAIL: "kevin.belleau@gmail.com"
