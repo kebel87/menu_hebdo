@@ -58,6 +58,9 @@ def _apply_migrations(db: sqlite3.Connection) -> None:
     existing = {row[1] for row in db.execute("PRAGMA table_info(recipe_meta)").fetchall()}
     if "is_hidden" not in existing:
         db.execute("ALTER TABLE recipe_meta ADD COLUMN is_hidden INTEGER NOT NULL DEFAULT 0")
+    tag_cols = {row[1] for row in db.execute("PRAGMA table_info(canonical_tags)").fetchall()}
+    if "color" not in tag_cols:
+        db.execute("ALTER TABLE canonical_tags ADD COLUMN color TEXT NOT NULL DEFAULT ''")
 
 
 def _create_tables(db: sqlite3.Connection) -> None:
@@ -212,14 +215,30 @@ def _boolify_slot(slot: dict[str, Any]) -> dict[str, Any]:
     return slot
 
 
+def _tags_for_slot(db: sqlite3.Connection, slot: dict[str, Any],
+                    tags_map: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """Tags canoniques d'un slot. Seules les recettes locales sont résolues ici ;
+    les recettes Mealie sont résolues côté API (via mealie_tag_mappings)."""
+    if slot.get("recipe_source") == "local" and slot.get("local_recipe_id"):
+        row = db.execute(
+            "SELECT tags_json FROM local_recipes WHERE id=?", (slot["local_recipe_id"],)
+        ).fetchone()
+        if row:
+            ids = json.loads(row["tags_json"] or "[]")
+            return [tags_map[i] for i in ids if i in tags_map]
+    return []
+
+
 def list_slots_for_plan(plan_id: str) -> list[dict[str, Any]]:
     with connect() as db:
         rows = db.execute(
             "SELECT * FROM meal_slots WHERE plan_id = ? ORDER BY slot_date", (plan_id,)
         ).fetchall()
         slots = [_boolify_slot(dict(r)) for r in rows]
+        tags_map = _canonical_tags_map(db)
         for slot in slots:
             slot["sides"] = _get_sides_for_slot(db, slot["id"])
+            slot["tags"] = _tags_for_slot(db, slot, tags_map)
         return slots
 
 
@@ -230,6 +249,7 @@ def get_slot(slot_id: str) -> dict[str, Any] | None:
             return None
         slot = _boolify_slot(dict(row))
         slot["sides"] = _get_sides_for_slot(db, slot_id)
+        slot["tags"] = _tags_for_slot(db, slot, _canonical_tags_map(db))
         return slot
 
 
@@ -240,8 +260,10 @@ def list_slots_for_range(start_date: str, end_date: str) -> list[dict[str, Any]]
             (start_date, end_date),
         ).fetchall()
         slots = [_boolify_slot(dict(r)) for r in rows]
+        tags_map = _canonical_tags_map(db)
         for slot in slots:
             slot["sides"] = _get_sides_for_slot(db, slot["id"])
+            slot["tags"] = _tags_for_slot(db, slot, tags_map)
         return slots
 
 
@@ -289,6 +311,7 @@ def upsert_slot(
         )
         slot = _boolify_slot(dict(db.execute("SELECT * FROM meal_slots WHERE id=?", (slot_id,)).fetchone()))
         slot["sides"] = _get_sides_for_slot(db, slot_id)
+        slot["tags"] = _tags_for_slot(db, slot, _canonical_tags_map(db))
         return slot
 
 
@@ -304,6 +327,32 @@ def clear_slot(plan_id: str, slot_date: str, actor_name: str) -> None:
                 db, actor_name, "menu.slot.cleared",
                 {"slot_date": slot_date, "recipe_name": row["recipe_name"]},
             )
+
+
+def move_slot(slot_id: str, new_date: str, actor_name: str) -> dict[str, Any]:
+    with connect() as db:
+        row = db.execute("SELECT * FROM meal_slots WHERE id=?", (slot_id,)).fetchone()
+        if not row:
+            raise ValueError("Slot introuvable")
+        existing = db.execute(
+            "SELECT id FROM meal_slots WHERE plan_id=? AND slot_date=? AND id!=?",
+            (row["plan_id"], new_date, slot_id),
+        ).fetchone()
+        if existing:
+            raise ValueError("Un repas existe déjà à cette date")
+        now = now_iso()
+        db.execute(
+            "UPDATE meal_slots SET slot_date=?, updated_at=? WHERE id=?",
+            (new_date, now, slot_id),
+        )
+        _record_notification_event(
+            db, actor_name, "menu.slot.changed",
+            {"slot_date": new_date, "recipe_name": row["recipe_name"]},
+        )
+        slot = _boolify_slot(dict(db.execute("SELECT * FROM meal_slots WHERE id=?", (slot_id,)).fetchone()))
+        slot["sides"] = _get_sides_for_slot(db, slot_id)
+        slot["tags"] = _tags_for_slot(db, slot, _canonical_tags_map(db))
+        return slot
 
 
 def swap_slots(slot_id_a: str, slot_id_b: str, actor_name: str) -> tuple[dict, dict]:
@@ -330,6 +379,9 @@ def swap_slots(slot_id_a: str, slot_id_b: str, actor_name: str) -> tuple[dict, d
         updated_b = _boolify_slot(dict(db.execute("SELECT * FROM meal_slots WHERE id=?", (slot_id_b,)).fetchone()))
         updated_a["sides"] = _get_sides_for_slot(db, slot_id_a)
         updated_b["sides"] = _get_sides_for_slot(db, slot_id_b)
+        tags_map = _canonical_tags_map(db)
+        updated_a["tags"] = _tags_for_slot(db, updated_a, tags_map)
+        updated_b["tags"] = _tags_for_slot(db, updated_b, tags_map)
         return updated_a, updated_b
 
 
@@ -415,19 +467,20 @@ def set_slot_sides(slot_id: str, sides: list[dict[str, Any]]) -> list[dict[str, 
 def list_local_recipes() -> list[dict[str, Any]]:
     with connect() as db:
         rows = db.execute("SELECT * FROM local_recipes ORDER BY name").fetchall()
-        return [_parse_local_recipe(dict(r)) for r in rows]
+        tags_map = _canonical_tags_map(db)
+        return [_parse_local_recipe(dict(r), tags_map) for r in rows]
 
 
 def get_local_recipe(recipe_id: str) -> dict[str, Any] | None:
     with connect() as db:
         row = db.execute("SELECT * FROM local_recipes WHERE id=?", (recipe_id,)).fetchone()
-        return _parse_local_recipe(dict(row)) if row else None
+        return _parse_local_recipe(dict(row), _canonical_tags_map(db)) if row else None
 
 
 def create_local_recipe(
     name: str,
     ingredients: list[dict] | None = None,
-    tags: list[str] | None = None,
+    tag_ids: list[str] | None = None,
     is_weekend: bool = False,
     makes_lunch: bool = False,
     prep_minutes: int | None = None,
@@ -443,12 +496,12 @@ def create_local_recipe(
                VALUES (?,?,?,?,?,?,?,?,?,?)""",
             (recipe_id, name.strip(),
              json.dumps(ingredients or []),
-             json.dumps(tags or []),
+             json.dumps(tag_ids or []),
              int(is_weekend), int(makes_lunch),
              prep_minutes, notes, now, now),
         )
         row = db.execute("SELECT * FROM local_recipes WHERE id=?", (recipe_id,)).fetchone()
-        return _parse_local_recipe(dict(row))
+        return _parse_local_recipe(dict(row), _canonical_tags_map(db))
 
 
 def update_local_recipe(recipe_id: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -460,7 +513,7 @@ def update_local_recipe(recipe_id: str, payload: dict[str, Any]) -> dict[str, An
         for key, val in payload.items():
             if key == "ingredients" and isinstance(val, list):
                 updates.append(("ingredients_json", json.dumps(val)))
-            elif key == "tags" and isinstance(val, list):
+            elif key == "tag_ids" and isinstance(val, list):
                 updates.append(("tags_json", json.dumps(val)))
             elif key in allowed:
                 updates.append((key, val))
@@ -471,7 +524,7 @@ def update_local_recipe(recipe_id: str, payload: dict[str, Any]) -> dict[str, An
         row = db.execute("SELECT * FROM local_recipes WHERE id=?", (recipe_id,)).fetchone()
         if not row:
             raise ValueError("Recette introuvable")
-        return _parse_local_recipe(dict(row))
+        return _parse_local_recipe(dict(row), _canonical_tags_map(db))
 
 
 def delete_local_recipe(recipe_id: str) -> None:
@@ -479,9 +532,16 @@ def delete_local_recipe(recipe_id: str) -> None:
         db.execute("DELETE FROM local_recipes WHERE id=?", (recipe_id,))
 
 
-def _parse_local_recipe(r: dict) -> dict:
+def _canonical_tags_map(db: sqlite3.Connection) -> dict[str, dict[str, Any]]:
+    rows = db.execute("SELECT * FROM canonical_tags").fetchall()
+    return {r["id"]: dict(r) for r in rows}
+
+
+def _parse_local_recipe(r: dict, tags_map: dict[str, dict[str, Any]]) -> dict:
     r["ingredients"] = json.loads(r.get("ingredients_json") or "[]")
-    r["tags"] = json.loads(r.get("tags_json") or "[]")
+    tag_ids = json.loads(r.get("tags_json") or "[]")
+    r["tag_ids"] = tag_ids
+    r["tags"] = [tags_map[i] for i in tag_ids if i in tags_map]
     return r
 
 
@@ -554,15 +614,33 @@ def list_canonical_tags() -> list[dict[str, Any]]:
         return [dict(r) for r in rows]
 
 
-def create_canonical_tag(name: str, description: str = "") -> dict[str, Any]:
+def create_canonical_tag(name: str, description: str = "", color: str = "") -> dict[str, Any]:
     with connect() as db:
         tag_id = new_id()
         now = now_iso()
         db.execute(
-            "INSERT INTO canonical_tags (id, name, description, created_at) VALUES (?,?,?,?)",
-            (tag_id, name.strip(), description.strip(), now),
+            "INSERT INTO canonical_tags (id, name, description, color, created_at) VALUES (?,?,?,?,?)",
+            (tag_id, name.strip(), description.strip(), color.strip(), now),
         )
-        return {"id": tag_id, "name": name.strip(), "description": description.strip(), "created_at": now}
+        return {"id": tag_id, "name": name.strip(), "description": description.strip(),
+                "color": color.strip(), "created_at": now}
+
+
+def update_canonical_tag(tag_id: str, name: str | None = None, color: str | None = None) -> dict[str, Any]:
+    with connect() as db:
+        updates: list[tuple[str, Any]] = []
+        if name is not None and name.strip():
+            updates.append(("name", name.strip()))
+        if color is not None:
+            updates.append(("color", color.strip()))
+        if updates:
+            set_clause = ", ".join(f"{k}=?" for k, _ in updates)
+            values = [v for _, v in updates] + [tag_id]
+            db.execute(f"UPDATE canonical_tags SET {set_clause} WHERE id=?", values)
+        row = db.execute("SELECT * FROM canonical_tags WHERE id=?", (tag_id,)).fetchone()
+        if not row:
+            raise ValueError("Tag introuvable")
+        return dict(row)
 
 
 def delete_canonical_tag(tag_id: str) -> None:

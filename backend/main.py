@@ -30,7 +30,9 @@ from menu_app.store import (
     list_slots_for_plan,
     list_slots_for_range,
     list_tag_mappings,
+    move_slot,
     recipe_frequency,
+    update_canonical_tag,
     save_push_subscription,
     search_history,
     set_slot_sides,
@@ -99,6 +101,61 @@ def me(actor: Actor = Depends(current_actor)) -> dict:
 # Semaine — plans et slots
 # ---------------------------------------------------------------------------
 
+def _mealie_tag_mapping_context() -> tuple[dict[str, dict], dict[str, str]] | None:
+    """Tags canoniques + mappings confirmés, chargés une fois par requête pour
+    résoudre les tags natifs Mealie -> tags canoniques ("app")."""
+    try:
+        canonical_by_id = {t["id"]: t for t in list_canonical_tags()}
+        canonical_id_by_mealie_name = {
+            m["mealie_tag_name"]: m["canonical_tag_id"]
+            for m in list_tag_mappings(status="confirmed")
+            if m.get("canonical_tag_id")
+        }
+        return canonical_by_id, canonical_id_by_mealie_name
+    except Exception:
+        return None
+
+
+def _canonical_tags_for_mealie_recipe(
+    recipe: dict[str, Any],
+    canonical_by_id: dict[str, dict],
+    canonical_id_by_mealie_name: dict[str, str],
+) -> list[dict[str, Any]]:
+    raw_names = [
+        t["name"] if isinstance(t, dict) else t
+        for t in recipe.get("tags", [])
+        if (isinstance(t, dict) and "name" in t) or isinstance(t, str)
+    ]
+    seen: set[str] = set()
+    tags: list[dict[str, Any]] = []
+    for name in raw_names:
+        cid = canonical_id_by_mealie_name.get(name)
+        if cid and cid not in seen and cid in canonical_by_id:
+            seen.add(cid)
+            tags.append(canonical_by_id[cid])
+    return tags
+
+
+def _resolve_mealie_slot_tags(slots: list[dict[str, Any]]) -> None:
+    """Complète (in place) slot["tags"] pour les slots Mealie, en résolvant les tags
+    natifs Mealie de la recette vers les tags canoniques confirmés (mealie_tag_mappings)."""
+    mealie_slots = [s for s in slots if s.get("recipe_source") == "mealie" and s.get("mealie_slug")]
+    if not mealie_slots or not mealie_ok():
+        return
+    ctx = _mealie_tag_mapping_context()
+    if ctx is None:
+        return
+    canonical_by_id, canonical_id_by_mealie_name = ctx
+    for slot in mealie_slots:
+        try:
+            recipe = get_recipe(slot["mealie_slug"])
+        except Exception:
+            recipe = None
+        if not recipe:
+            continue
+        slot["tags"] = _canonical_tags_for_mealie_recipe(recipe, canonical_by_id, canonical_id_by_mealie_name)
+
+
 @app.get("/api/week/{week_start}")
 def get_week(
     week_start: str,
@@ -106,6 +163,7 @@ def get_week(
 ) -> dict[str, Any]:
     plan = get_or_create_plan(week_start)
     slots = list_slots_for_plan(plan["id"])
+    _resolve_mealie_slot_tags(slots)
     return {"plan": plan, "slots": slots}
 
 
@@ -172,6 +230,21 @@ def swap(
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return {"slot_a": a, "slot_b": b}
+
+
+@app.post("/api/slots/move")
+def move(
+    body: dict = Body(...),
+    actor: Actor = Depends(require_permission("menu.edit")),
+) -> dict[str, Any]:
+    slot_id = body.get("slot_id")
+    new_date = body.get("new_date")
+    if not slot_id or not new_date:
+        raise HTTPException(status_code=422, detail="slot_id et new_date requis")
+    try:
+        return move_slot(slot_id, new_date, actor.name)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 # ---------------------------------------------------------------------------
@@ -253,7 +326,7 @@ def api_create_local_recipe(
     return create_local_recipe(
         name=name,
         ingredients=body.get("ingredients"),
-        tags=body.get("tags"),
+        tag_ids=body.get("tag_ids"),
         is_weekend=body.get("is_weekend", False),
         makes_lunch=body.get("makes_lunch", False),
         prep_minutes=body.get("prep_minutes"),
@@ -302,6 +375,7 @@ def api_recipes(
             "id": r["id"],
             "name": r["name"],
             "tags": r.get("tags", []),
+            "tag_ids": r.get("tag_ids", []),
             "is_weekend": bool(r.get("is_weekend")),
             "makes_lunch": bool(r.get("makes_lunch")),
             "is_hidden": False,
@@ -313,22 +387,22 @@ def api_recipes(
     if mealie_ok():
         try:
             mealie_recipes = get_recipes()
+            tag_ctx = _mealie_tag_mapping_context()
             for r in mealie_recipes:
                 slug = r.get("slug", "")
                 meta = get_recipe_meta(slug)
                 if meta.get("is_hidden") and not include_hidden:
                     continue
-                tags_raw = [
-                    t["name"] if isinstance(t, dict) else t
-                    for t in r.get("tags", [])
-                ]
+                tags = (
+                    _canonical_tags_for_mealie_recipe(r, *tag_ctx) if tag_ctx else []
+                )
                 ingredients = r.get("recipeIngredient", [])
                 score_data = inventory_score(ingredients, inventory)
                 results.append({
                     "source": "mealie",
                     "slug": slug,
                     "name": r.get("name", slug),
-                    "tags": tags_raw,
+                    "tags": tags,
                     "is_weekend": bool(meta.get("is_weekend")),
                     "makes_lunch": bool(meta.get("makes_lunch")),
                     "is_hidden": bool(meta.get("is_hidden")),
@@ -402,7 +476,19 @@ def api_create_tag(
     name = body.get("name", "").strip()
     if not name:
         raise HTTPException(status_code=422, detail="name requis")
-    return create_canonical_tag(name, body.get("description", ""))
+    return create_canonical_tag(name, body.get("description", ""), body.get("color", ""))
+
+
+@app.patch("/api/tags/{tag_id}")
+def api_update_tag(
+    tag_id: str,
+    body: dict = Body(...),
+    actor: Actor = Depends(require_permission("settings.manage")),
+) -> dict:
+    try:
+        return update_canonical_tag(tag_id, name=body.get("name"), color=body.get("color"))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @app.delete("/api/tags/{tag_id}")

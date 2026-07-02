@@ -56,6 +56,7 @@ interface MealSlot {
   makes_lunch: boolean;
   notes: string;
   sides: SlotSide[];
+  tags: CanonicalTag[];
   inventory_score?: {
     score: number | null;
     missing: string[];
@@ -83,7 +84,8 @@ interface Recipe {
   id?: string;
   slug?: string;
   name: string;
-  tags: string[];
+  tags: CanonicalTag[];
+  tag_ids?: string[];
   is_weekend: boolean;
   makes_lunch: boolean;
   is_hidden: boolean;
@@ -107,6 +109,7 @@ interface CanonicalTag {
   id: string;
   name: string;
   description: string;
+  color: string;
 }
 
 interface TagMapping {
@@ -134,6 +137,7 @@ type ViewMode = "week" | "recipes" | "stats" | "settings";
 const DAYS_FR = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
 const DAYS_FULL = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"];
 const MONTHS_FR = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."];
+const DEFAULT_TAG_COLOR = "#94a3b8";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -144,6 +148,16 @@ async function api<T>(url: string, init: RequestInit = {}): Promise<T> {
   });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   return res.json() as Promise<T>;
+}
+
+function readableTextColor(hex: string): string {
+  const h = hex.replace("#", "");
+  const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
+  const r = parseInt(full.slice(0, 2), 16) || 0;
+  const g = parseInt(full.slice(2, 4), 16) || 0;
+  const b = parseInt(full.slice(4, 6), 16) || 0;
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return luminance > 0.6 ? "#242826" : "#ffffff";
 }
 
 function mondayOf(d: Date): Date {
@@ -390,20 +404,13 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
     const slotB = slotByDate(dateB);
     if (!slotA) return;
     if (!slotB) {
-      // déplace vers un slot vide → met le slot A à la date B
+      // déplace vers un slot vide → change juste la date du slot A (même id,
+      // donc les accompagnements associés suivent)
       try {
-        const updated = await api<MealSlot>(`/api/week/${weekStart}/slot/${dateB}`, {
-          method: "PUT",
-          body: JSON.stringify({
-            recipe_source: slotA.recipe_source,
-            recipe_name: slotA.recipe_name,
-            mealie_slug: slotA.mealie_slug,
-            local_recipe_id: slotA.local_recipe_id,
-            makes_lunch: slotA.makes_lunch,
-            notes: slotA.notes,
-          }),
+        const updated = await api<MealSlot>("/api/slots/move", {
+          method: "POST",
+          body: JSON.stringify({ slot_id: slotA.id, new_date: dateB }),
         });
-        await api(`/api/week/${weekStart}/slot/${dateA}`, { method: "DELETE" });
         setSlots((prev) => [
           ...prev.filter((s) => s.slot_date !== dateA && s.slot_date !== dateB),
           updated,
@@ -556,6 +563,18 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
                       )}
                     </div>
                     <div className="day-badges">
+                      {slot?.tags?.slice(0, 2).map((t) => (
+                        <span
+                          key={t.id}
+                          className="badge tag-badge"
+                          style={{
+                            background: t.color || DEFAULT_TAG_COLOR,
+                            color: readableTextColor(t.color || DEFAULT_TAG_COLOR),
+                          }}
+                        >
+                          {t.name}
+                        </span>
+                      ))}
                       {slot?.makes_lunch && <span className="badge badge-lunch">Lunch</span>}
                       {slot && slot.inventory_score?.score !== undefined && (
                         <span className={`badge ${scoreClass(slot.inventory_score?.score)}`}>
@@ -1053,7 +1072,16 @@ function RecipeDetailModal({
   const [isWeekend, setIsWeekend] = useState(recipe.is_weekend);
   const [makesLunch, setMakesLunch] = useState(recipe.makes_lunch);
   const [isHidden, setIsHidden] = useState(recipe.is_hidden);
+  const [tagIds, setTagIds] = useState<string[]>(recipe.tag_ids ?? []);
+  const [allTags, setAllTags] = useState<CanonicalTag[]>([]);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (recipe.source !== "local") return;
+    api<CanonicalTag[]>("/api/tags")
+      .then((t) => setAllTags([...t].sort((a, b) => a.name.localeCompare(b.name))))
+      .catch(() => {});
+  }, [recipe.source]);
 
   async function save() {
     setSaving(true);
@@ -1067,7 +1095,7 @@ function RecipeDetailModal({
       } else if (recipe.source === "local" && recipe.id) {
         const updated = await api<Recipe>(`/api/local-recipes/${recipe.id}`, {
           method: "PATCH",
-          body: JSON.stringify({ is_weekend: isWeekend, makes_lunch: makesLunch }),
+          body: JSON.stringify({ is_weekend: isWeekend, makes_lunch: makesLunch, tag_ids: tagIds }),
         });
         onUpdated({ ...recipe, ...updated, source: "local" });
       }
@@ -1134,6 +1162,21 @@ function RecipeDetailModal({
                 Fait des lunchs le lendemain
               </label>
             </div>
+            {recipe.source === "local" && (
+              <div className="form-row">
+                <label>Tags</label>
+                <select
+                  multiple
+                  value={tagIds}
+                  onChange={(e) => setTagIds(Array.from(e.target.selectedOptions, (o) => o.value))}
+                  size={Math.min(6, Math.max(3, allTags.length || 1))}
+                >
+                  {allTags.map((t) => (
+                    <option key={t.id} value={t.id}>{t.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
             {recipe.source === "mealie" && (
               <div className="form-row">
                 <label>
@@ -1181,7 +1224,15 @@ function LocalRecipeModal({
   const [makesLunch, setMakesLunch] = useState(recipe?.makes_lunch ?? false);
   const [prep, setPrep] = useState(recipe?.prep_minutes?.toString() ?? "");
   const [notes, setNotes] = useState(recipe?.notes ?? "");
+  const [tagIds, setTagIds] = useState<string[]>(recipe?.tag_ids ?? []);
+  const [allTags, setAllTags] = useState<CanonicalTag[]>([]);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    api<CanonicalTag[]>("/api/tags")
+      .then((t) => setAllTags([...t].sort((a, b) => a.name.localeCompare(b.name))))
+      .catch(() => {});
+  }, []);
 
   async function save() {
     if (!name.trim()) return;
@@ -1193,6 +1244,7 @@ function LocalRecipeModal({
         makes_lunch: makesLunch,
         prep_minutes: prep ? parseInt(prep) : null,
         notes,
+        tag_ids: tagIds,
       };
       let r: Recipe;
       if (recipe?.id) {
@@ -1240,6 +1292,19 @@ function LocalRecipeModal({
             <input type="checkbox" checked={makesLunch} onChange={(e) => setMakesLunch(e.target.checked)} style={{ marginRight: 6 }} />
             Fait des lunchs le lendemain
           </label>
+        </div>
+        <div className="form-row">
+          <label>Tags</label>
+          <select
+            multiple
+            value={tagIds}
+            onChange={(e) => setTagIds(Array.from(e.target.selectedOptions, (o) => o.value))}
+            size={Math.min(6, Math.max(3, allTags.length || 1))}
+          >
+            {allTags.map((t) => (
+              <option key={t.id} value={t.id}>{t.name}</option>
+            ))}
+          </select>
         </div>
         <div className="form-row">
           <label>Notes</label>
@@ -1474,7 +1539,9 @@ function CanonicalTagsSection() {
   const [newName, setNewName] = useState("");
 
   useEffect(() => {
-    api<CanonicalTag[]>("/api/tags").then(setTags).catch(() => {});
+    api<CanonicalTag[]>("/api/tags")
+      .then((t) => setTags([...t].sort((a, b) => a.name.localeCompare(b.name))))
+      .catch(() => {});
   }, []);
 
   async function addTag() {
@@ -1483,8 +1550,25 @@ function CanonicalTagsSection() {
       method: "POST",
       body: JSON.stringify({ name: newName.trim() }),
     });
-    setTags((prev) => [...prev, t]);
+    setTags((prev) => [...prev, t].sort((a, b) => a.name.localeCompare(b.name)));
     setNewName("");
+  }
+
+  async function renameTag(id: string, name: string) {
+    if (!name.trim()) return;
+    const t = await api<CanonicalTag>(`/api/tags/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name: name.trim() }),
+    });
+    setTags((prev) => prev.map((x) => (x.id === id ? t : x)).sort((a, b) => a.name.localeCompare(b.name)));
+  }
+
+  async function recolorTag(id: string, color: string) {
+    const t = await api<CanonicalTag>(`/api/tags/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ color }),
+    });
+    setTags((prev) => prev.map((x) => (x.id === id ? t : x)));
   }
 
   async function deleteTag(id: string) {
@@ -1495,15 +1579,31 @@ function CanonicalTagsSection() {
   return (
     <div className="settings-section">
       <h2>Tags canoniques</h2>
-      <div className="sides-list" style={{ marginBottom: 8 }}>
+      <div className="canonical-tags-list" style={{ marginBottom: 8 }}>
         {tags.map((t) => (
-          <span key={t.id} className="side-chip">
-            {t.name}
-            <button onClick={() => deleteTag(t.id)} title="Supprimer">
-              <X size={11} />
+          <div key={t.id} className="canonical-tag-row">
+            <input
+              type="color"
+              value={t.color || DEFAULT_TAG_COLOR}
+              onChange={(e) => recolorTag(t.id, e.target.value)}
+              title="Couleur du badge dans l'onglet Semaine"
+              className="tag-color-input"
+            />
+            <input
+              defaultValue={t.name}
+              key={t.id + t.name}
+              onBlur={(e) => e.target.value !== t.name && renameTag(t.id, e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+              className="tag-name-input"
+            />
+            <button className="btn-icon" onClick={() => deleteTag(t.id)} title="Supprimer">
+              <X size={13} />
             </button>
-          </span>
+          </div>
         ))}
+        {tags.length === 0 && (
+          <div className="empty-state"><p>Aucun tag canonique</p></div>
+        )}
       </div>
       <div className="sides-add">
         <input
