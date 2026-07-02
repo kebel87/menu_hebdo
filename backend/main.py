@@ -32,6 +32,7 @@ from menu_app.store import (
     list_tag_mappings,
     move_slot,
     recipe_frequency,
+    side_frequency,
     update_canonical_tag,
     save_push_subscription,
     search_history,
@@ -272,6 +273,19 @@ def api_list_sides(actor: Actor = Depends(require_permission("menu.read"))) -> l
     return list_sides()
 
 
+@app.get("/api/sides/favorites")
+def api_side_favorites(
+    limit: int = 8,
+    actor: Actor = Depends(require_permission("menu.read")),
+) -> list[dict[str, Any]]:
+    """Accompagnements les plus fréquemment utilisés (12 dernières semaines)."""
+    freq = side_frequency(weeks=12)
+    return [
+        {"name": f["name"], "side_id": f.get("side_id"), "category": f.get("category", "")}
+        for f in freq[:limit]
+    ]
+
+
 @app.post("/api/sides")
 def api_create_side(
     body: dict = Body(...),
@@ -359,11 +373,7 @@ def api_delete_local_recipe(
 # Mealie proxy + recettes unifiées
 # ---------------------------------------------------------------------------
 
-@app.get("/api/recipes")
-def api_recipes(
-    include_hidden: bool = False,
-    actor: Actor = Depends(require_permission("menu.read")),
-) -> list[dict[str, Any]]:
+def _build_recipe_list(include_hidden: bool) -> list[dict[str, Any]]:
     inventory = get_inventory()
     local = list_local_recipes()
     results: list[dict[str, Any]] = []
@@ -415,6 +425,28 @@ def api_recipes(
             pass
 
     return results
+
+
+@app.get("/api/recipes")
+def api_recipes(
+    include_hidden: bool = False,
+    actor: Actor = Depends(require_permission("menu.read")),
+) -> list[dict[str, Any]]:
+    return _build_recipe_list(include_hidden)
+
+
+@app.get("/api/recipes/favorites")
+def api_recipe_favorites(
+    limit: int = 8,
+    actor: Actor = Depends(require_permission("menu.read")),
+) -> list[dict[str, Any]]:
+    """Recettes les plus fréquemment planifiées (12 dernières semaines)."""
+    freq = recipe_frequency(weeks=12)
+    order = {f["recipe_name"]: i for i, f in enumerate(freq)}
+    all_recipes = _build_recipe_list(include_hidden=False)
+    favorites = [r for r in all_recipes if r["name"] in order]
+    favorites.sort(key=lambda r: order[r["name"]])
+    return favorites[:limit]
 
 
 @app.get("/api/recipes/mealie/{slug}")

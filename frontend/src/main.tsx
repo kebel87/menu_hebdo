@@ -106,6 +106,12 @@ interface Side {
   category: string;
 }
 
+interface FavoriteSide {
+  name: string;
+  side_id?: string;
+  category: string;
+}
+
 interface CanonicalTag {
   id: string;
   name: string;
@@ -774,15 +780,20 @@ function StepIndicator({ steps, current }: { steps: string[]; current: number })
 
 function SidesEditor({ sides, onChange }: { sides: SlotSide[]; onChange: (s: SlotSide[]) => void }) {
   const [input, setInput] = useState("");
+  const [open, setOpen] = useState(false);
   const [libSides, setLibSides] = useState<Side[]>([]);
+  const [favorites, setFavorites] = useState<FavoriteSide[]>([]);
 
   useEffect(() => {
     api<Side[]>("/api/sides").then(setLibSides).catch(() => {});
+    api<FavoriteSide[]>("/api/sides/favorites").then(setFavorites).catch(() => {});
   }, []);
 
   const suggestions = input.length > 0
     ? libSides.filter((s) => s.name.toLowerCase().includes(input.toLowerCase()))
-    : libSides.slice(0, 5);
+    : libSides.slice(0, 8);
+  const exactMatch = suggestions.some((s) => s.name.toLowerCase() === input.trim().toLowerCase());
+  const chosenNames = new Set(sides.map((s) => s.name.toLowerCase()));
 
   function addSide(name: string, sideId?: string) {
     onChange([...sides, {
@@ -794,6 +805,7 @@ function SidesEditor({ sides, onChange }: { sides: SlotSide[]; onChange: (s: Slo
       sort_order: sides.length,
     }]);
     setInput("");
+    setOpen(false);
   }
 
   function removeSide(sideId: string) {
@@ -815,30 +827,52 @@ function SidesEditor({ sides, onChange }: { sides: SlotSide[]; onChange: (s: Slo
           <span style={{ fontSize: 12, color: "var(--muted)" }}>Aucun accompagnement</span>
         )}
       </div>
-      <div className="sides-add">
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Ajouter un accompagnement…"
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && input.trim()) addSide(input.trim());
-          }}
-        />
-        <button onClick={() => input.trim() && addSide(input.trim())}>
-          <Plus size={14} />
-        </button>
+
+      <div className="combo">
+        <div className="combo-input-row">
+          <Search size={14} style={{ color: "var(--muted)", flexShrink: 0 }} />
+          <input
+            value={input}
+            onChange={(e) => { setInput(e.target.value); setOpen(true); }}
+            onFocus={() => setOpen(true)}
+            onBlur={() => setTimeout(() => setOpen(false), 150)}
+            placeholder="Rechercher ou ajouter un accompagnement…"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && input.trim()) addSide(input.trim());
+            }}
+          />
+        </div>
+        {open && (
+          <div className="combo-dropdown">
+            {suggestions.map((s) => (
+              <button key={s.id} className="combo-option" onMouseDown={() => addSide(s.name, s.id)}>
+                {s.name}
+              </button>
+            ))}
+            {input.trim() && !exactMatch && (
+              <button className="combo-option combo-option-new" onMouseDown={() => addSide(input.trim())}>
+                Ajouter « {input.trim()} »
+              </button>
+            )}
+            {suggestions.length === 0 && !input.trim() && (
+              <div className="combo-empty">Aucun accompagnement dans la bibliothèque</div>
+            )}
+          </div>
+        )}
       </div>
-      {input && suggestions.length > 0 && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
-          {suggestions.map((s) => (
-            <button
-              key={s.id}
-              className="filter-chip"
-              onClick={() => addSide(s.name, s.id)}
-            >
-              {s.name}
-            </button>
-          ))}
+
+      {!open && !input && favorites.length > 0 && (
+        <div className="favorites-row">
+          <div className="favorites-label">Fréquents</div>
+          <div className="filter-chips">
+            {favorites
+              .filter((f) => !chosenNames.has(f.name.toLowerCase()))
+              .map((f) => (
+                <button key={f.name} className="filter-chip" onClick={() => addSide(f.name, f.side_id)}>
+                  {f.name}
+                </button>
+              ))}
+          </div>
         </div>
       )}
     </div>
@@ -915,6 +949,7 @@ function MealWizard({
     mode === "meal" || mode === "sides" ? (slot?.sides ?? []) : []
   );
   const [recipes, setRecipes] = useState<Recipe[]>([]);
+  const [favorites, setFavorites] = useState<Recipe[]>([]);
   const [q, setQ] = useState("");
   const [filters, setFilters] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
@@ -926,6 +961,7 @@ function MealWizard({
     api<Recipe[]>("/api/recipes")
       .then(setRecipes)
       .finally(() => setLoading(false));
+    api<Recipe[]>("/api/recipes/favorites").then(setFavorites).catch(() => {});
   }, [mode]);
 
   function toggleFilter(f: string) {
@@ -945,6 +981,10 @@ function MealWizard({
     }
     return true;
   });
+
+  const isIdle = !q && filters.size === 0;
+  const showingFavorites = isIdle && favorites.length > 0;
+  const mealList = showingFavorites ? favorites : isIdle ? recipes : filtered;
 
   function pickMeal(r: Recipe) {
     setChosenRecipe(r);
@@ -1017,10 +1057,11 @@ function MealWizard({
               <div className="empty-state"><RefreshCw size={24} className="spin" /></div>
             ) : (
               <div className="recipe-list">
-                {filtered.length === 0 && (
+                {showingFavorites && <div className="favorites-label">Favoris</div>}
+                {mealList.length === 0 && (
                   <div className="empty-state"><p>Aucune recette trouvée</p></div>
                 )}
-                {filtered.map((r) => {
+                {mealList.map((r) => {
                   const key = r.source === "mealie" ? `mealie-${r.slug}` : `local-${r.id}`;
                   return (
                     <div key={key} className="recipe-card" onClick={() => pickMeal(r)}>

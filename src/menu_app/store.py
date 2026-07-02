@@ -820,10 +820,29 @@ def recipe_frequency(weeks: int = 12) -> list[dict[str, Any]]:
                       MAX(slot_date) as last_date,
                       MIN(slot_date) as first_date
                FROM meal_slots
-               WHERE slot_date >= date('now', ? || ' weeks')
+               WHERE slot_date >= date('now', ? || ' days')
                GROUP BY recipe_name
                ORDER BY count DESC""",
-            (f"-{weeks}",),
+            (f"-{weeks * 7}",),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def side_frequency(weeks: int = 12) -> list[dict[str, Any]]:
+    """Fréquence des accompagnements sur N semaines passées."""
+    with connect() as db:
+        rows = db.execute(
+            """SELECT COALESCE(sd.name, ss.free_text) as name, ss.side_id as side_id,
+                      COALESCE(sd.category, '') as category,
+                      COUNT(*) as count
+               FROM meal_slot_sides ss
+               JOIN meal_slots ms ON ms.id = ss.slot_id
+               LEFT JOIN sides sd ON sd.id = ss.side_id
+               WHERE ms.slot_date >= date('now', ? || ' days')
+                 AND COALESCE(sd.name, ss.free_text) != ''
+               GROUP BY COALESCE(sd.name, ss.free_text)
+               ORDER BY count DESC""",
+            (f"-{weeks * 7}",),
         ).fetchall()
         return [dict(r) for r in rows]
 
