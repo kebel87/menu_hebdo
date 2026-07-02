@@ -528,7 +528,7 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
               <DroppableCard key={iso} slotDate={iso} isOver={isOver}>
                 <DraggableCard slotDate={iso} slot={slot}>
                   <div
-                    className={`day-card-header${isToday ? " today" : ""}`}
+                    className={`day-card-header dow-${i}${isToday ? " today" : ""}`}
                     onClick={openPicker}
                   >
                     <span className="day-name">{DAYS_FR[i]}</span>

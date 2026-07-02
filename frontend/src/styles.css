@@ -235,7 +235,7 @@ body {
   flex-shrink: 0;
 }
 .day-card-header .day-name {
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 700;
   text-transform: uppercase;
   color: var(--muted);
@@ -246,8 +246,28 @@ body {
   font-weight: 700;
   color: var(--muted);
 }
+/* Teinte pastel par jour de semaine (Lun → Dim) */
+.day-card-header.dow-0 { background: hsl(205, 60%, 87%); }
+.day-card-header.dow-1 { background: hsl(178, 55%, 84%); }
+.day-card-header.dow-2 { background: hsl(140, 50%, 86%); }
+.day-card-header.dow-3 { background: hsl(42, 65%, 84%); }
+.day-card-header.dow-4 { background: hsl(18, 68%, 86%); }
+.day-card-header.dow-5 { background: hsl(325, 50%, 88%); }
+.day-card-header.dow-6 { background: hsl(265, 45%, 88%); }
+
+/* "Aujourd'hui" = version saturée de la même teinte, texte blanc */
+.day-card-header.today { color: #fff; }
 .day-card-header.today .day-name,
-.day-card-header.today .day-date { color: var(--green); }
+.day-card-header.today .day-date { color: #fff; }
+.day-card-header.dow-0.today { background: hsl(205, 62%, 40%); }
+.day-card-header.dow-1.today { background: hsl(178, 55%, 30%); }
+.day-card-header.dow-2.today { background: hsl(140, 45%, 32%); }
+.day-card-header.dow-3.today { background: hsl(38, 70%, 42%); }
+.day-card-header.dow-4.today { background: hsl(16, 62%, 46%); }
+.day-card-header.dow-5.today { background: hsl(325, 50%, 40%); }
+.day-card-header.dow-6.today { background: hsl(265, 40%, 40%); }
+.day-card-header.today .btn-icon { color: rgba(255,255,255,.85); }
+.day-card-header.today .btn-icon:hover { background: rgba(255,255,255,.15); color: #fff; }
 
 .day-card-body {
   padding: 4px 10px;
