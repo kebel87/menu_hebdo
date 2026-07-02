@@ -32,7 +32,9 @@ from menu_app.store import (
     list_tag_mappings,
     move_slot,
     recipe_frequency,
+    recipe_usage_stats,
     side_frequency,
+    side_usage_stats,
     update_canonical_tag,
     save_push_subscription,
     search_history,
@@ -294,8 +296,11 @@ def put_slot_sides(
 # ---------------------------------------------------------------------------
 
 @app.get("/api/sides")
-def api_list_sides(actor: Actor = Depends(require_permission("menu.read"))) -> list[dict]:
-    return list_sides()
+def api_list_sides(
+    include_inactive: bool = False,
+    actor: Actor = Depends(require_permission("menu.read")),
+) -> list[dict]:
+    return list_sides(include_inactive)
 
 
 @app.get("/api/sides/favorites")
@@ -309,6 +314,17 @@ def api_side_favorites(
         {"name": f["name"], "side_id": f.get("side_id"), "category": f.get("category", "")}
         for f in freq[:limit]
     ]
+
+
+@app.get("/api/sides/stats")
+def api_side_stats(actor: Actor = Depends(require_permission("menu.edit"))) -> list[dict[str, Any]]:
+    """Vue de gestion : usage total, dernière consommation, statut favori (12 semaines)."""
+    stats = side_usage_stats()
+    freq = side_frequency(weeks=12)
+    favorite_names = {f["name"] for f in freq[:8]}
+    for s in stats:
+        s["is_favorite"] = s["name"] in favorite_names
+    return stats
 
 
 @app.post("/api/sides")
@@ -329,7 +345,7 @@ def api_update_side(
     actor: Actor = Depends(require_permission("menu.edit")),
 ) -> dict:
     try:
-        return update_side(side_id, body.get("name"), body.get("category"))
+        return update_side(side_id, body.get("name"), body.get("category"), body.get("is_active"))
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -402,10 +418,12 @@ def api_delete_local_recipe(
 def _build_recipe_list(include_hidden: bool) -> list[dict[str, Any]]:
     inventory = get_inventory()
     local = list_local_recipes()
+    usage = recipe_usage_stats()
     results: list[dict[str, Any]] = []
 
     for r in local:
         score_data = inventory_score(r.get("ingredients", []), inventory)
+        stats = usage.get(r["name"], {})
         results.append({
             "source": "local",
             "id": r["id"],
@@ -419,6 +437,8 @@ def _build_recipe_list(include_hidden: bool) -> list[dict[str, Any]]:
             "prep_minutes": r.get("prep_minutes"),
             "notes": r.get("notes", ""),
             "inventory_score": score_data,
+            "total_count": stats.get("count", 0),
+            "last_used": stats.get("last_date"),
         })
 
     if mealie_ok():
@@ -435,10 +455,12 @@ def _build_recipe_list(include_hidden: bool) -> list[dict[str, Any]]:
                 )
                 ingredients = r.get("recipeIngredient", [])
                 score_data = inventory_score(ingredients, inventory)
+                name = r.get("name", slug)
+                stats = usage.get(name, {})
                 results.append({
                     "source": "mealie",
                     "slug": slug,
-                    "name": r.get("name", slug),
+                    "name": name,
                     "tags": tags,
                     "liked_by": meta.get("liked_by", []),
                     "is_weekend": bool(meta.get("is_weekend")),
@@ -448,6 +470,8 @@ def _build_recipe_list(include_hidden: bool) -> list[dict[str, Any]]:
                     "notes": meta.get("notes", ""),
                     "image": r.get("image"),
                     "inventory_score": score_data,
+                    "total_count": stats.get("count", 0),
+                    "last_used": stats.get("last_date"),
                 })
         except Exception:
             pass

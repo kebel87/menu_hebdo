@@ -68,8 +68,8 @@ body {
   background: none;
   border: none;
   border-bottom: 2px solid transparent;
-  padding: 10px 14px;
-  font-size: 13px;
+  padding: 10px 8px;
+  font-size: 12px;
   font-weight: 500;
   color: var(--muted);
   cursor: pointer;
@@ -385,6 +385,21 @@ body {
 }
 .btn-icon.tag-filter-active { color: var(--green); background: var(--green-soft); }
 
+/* ── Accompagnements (gestion) ── */
+.side-stat-list { display: flex; flex-direction: column; gap: 6px; }
+.side-stat-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+}
+.side-stat-row.inactive { opacity: .5; }
+.side-stat-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.side-stat-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
 /* ── Sides expand panel ── */
 .sides-panel {
   border-top: 1px solid var(--line);
@@ -543,8 +558,26 @@ body {
 }
 .source-badge.mealie { background: #f0fdf4; color: #15803d; }
 .source-badge.local { background: var(--green-soft); color: var(--green); }
+.recipe-card-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 4px; }
 .recipe-card-meta { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .recipe-last { font-size: 11px; color: var(--muted); }
+
+.sort-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.sort-row select {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  font-size: 12px;
+  background: var(--panel);
+  color: var(--ink);
+}
 
 /* ── Stats ── */
 .stats-search { margin-bottom: 16px; }

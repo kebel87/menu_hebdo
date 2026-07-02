@@ -72,6 +72,9 @@ def _apply_migrations(db: sqlite3.Connection) -> None:
     meta_cols = {row[1] for row in db.execute("PRAGMA table_info(recipe_meta)").fetchall()}
     if "liked_by_json" not in meta_cols:
         db.execute("ALTER TABLE recipe_meta ADD COLUMN liked_by_json TEXT NOT NULL DEFAULT '[]'")
+    side_cols = {row[1] for row in db.execute("PRAGMA table_info(sides)").fetchall()}
+    if "is_active" not in side_cols:
+        db.execute("ALTER TABLE sides ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
 
 
 def _backfill_weekend_lunch_tags(db: sqlite3.Connection) -> None:
@@ -425,10 +428,20 @@ def swap_slots(slot_id_a: str, slot_id_b: str, actor_name: str) -> tuple[dict, d
 # sides (bibliothèque)
 # ---------------------------------------------------------------------------
 
-def list_sides() -> list[dict[str, Any]]:
+def _boolify_side(side: dict[str, Any]) -> dict[str, Any]:
+    side["is_active"] = bool(side.get("is_active", 1))
+    return side
+
+
+def list_sides(include_inactive: bool = False) -> list[dict[str, Any]]:
     with connect() as db:
-        rows = db.execute("SELECT * FROM sides ORDER BY category, name").fetchall()
-        return [dict(r) for r in rows]
+        if include_inactive:
+            rows = db.execute("SELECT * FROM sides ORDER BY category, name").fetchall()
+        else:
+            rows = db.execute(
+                "SELECT * FROM sides WHERE is_active=1 ORDER BY category, name"
+            ).fetchall()
+        return [_boolify_side(dict(r)) for r in rows]
 
 
 def create_side(name: str, category: str = "") -> dict[str, Any]:
@@ -436,27 +449,52 @@ def create_side(name: str, category: str = "") -> dict[str, Any]:
         side_id = new_id()
         now = now_iso()
         db.execute(
-            "INSERT INTO sides (id, name, category, created_at) VALUES (?,?,?,?)",
-            (side_id, name.strip(), category.strip(), now),
+            "INSERT INTO sides (id, name, category, is_active, created_at) VALUES (?,?,?,?,?)",
+            (side_id, name.strip(), category.strip(), 1, now),
         )
-        return {"id": side_id, "name": name.strip(), "category": category.strip(), "created_at": now}
+        row = db.execute("SELECT * FROM sides WHERE id=?", (side_id,)).fetchone()
+        return _boolify_side(dict(row))
 
 
-def update_side(side_id: str, name: str | None = None, category: str | None = None) -> dict[str, Any]:
+def update_side(
+    side_id: str,
+    name: str | None = None,
+    category: str | None = None,
+    is_active: bool | None = None,
+) -> dict[str, Any]:
     with connect() as db:
         if name is not None:
             db.execute("UPDATE sides SET name=? WHERE id=?", (name.strip(), side_id))
         if category is not None:
             db.execute("UPDATE sides SET category=? WHERE id=?", (category.strip(), side_id))
+        if is_active is not None:
+            db.execute("UPDATE sides SET is_active=? WHERE id=?", (int(is_active), side_id))
         row = db.execute("SELECT * FROM sides WHERE id=?", (side_id,)).fetchone()
         if not row:
             raise ValueError("Side introuvable")
-        return dict(row)
+        return _boolify_side(dict(row))
 
 
 def delete_side(side_id: str) -> None:
     with connect() as db:
         db.execute("DELETE FROM sides WHERE id=?", (side_id,))
+
+
+def side_usage_stats() -> list[dict[str, Any]]:
+    """Statistiques d'usage par accompagnement de la bibliothèque : nombre de
+    fois utilisé et date de dernière consommation (toutes périodes confondues)."""
+    with connect() as db:
+        rows = db.execute(
+            """SELECT s.id, s.name, s.category, s.is_active, s.created_at,
+                      COUNT(ss.id) as total_count,
+                      MAX(ms.slot_date) as last_used
+               FROM sides s
+               LEFT JOIN meal_slot_sides ss ON ss.side_id = s.id
+               LEFT JOIN meal_slots ms ON ms.id = ss.slot_id
+               GROUP BY s.id
+               ORDER BY s.name"""
+        ).fetchall()
+        return [_boolify_side(dict(r)) for r in rows]
 
 
 def _get_sides_for_slot(db: sqlite3.Connection, slot_id: str) -> list[dict[str, Any]]:
@@ -831,6 +869,17 @@ def search_history(q: str, limit: int = 50) -> list[dict[str, Any]]:
             (pattern, limit),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def recipe_usage_stats() -> dict[str, dict[str, Any]]:
+    """Nombre total de fois et dernière consommation par recette (nom), toutes périodes
+    confondues (contrairement à recipe_frequency, qui se limite à une fenêtre récente)."""
+    with connect() as db:
+        rows = db.execute(
+            "SELECT recipe_name, COUNT(*) as count, MAX(slot_date) as last_date "
+            "FROM meal_slots GROUP BY recipe_name"
+        ).fetchall()
+        return {r["recipe_name"]: {"count": r["count"], "last_date": r["last_date"]} for r in rows}
 
 
 def recipe_frequency(weeks: int = 12) -> list[dict[str, Any]]:

@@ -27,6 +27,9 @@ import {
   Bell,
   BellOff,
   Filter,
+  Salad,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import "./styles.css";
 
@@ -113,12 +116,22 @@ interface Recipe {
     missing: string[];
     available: string[];
   };
+  total_count?: number;
+  last_used?: string | null;
 }
 
 interface Side {
   id: string;
   name: string;
   category: string;
+}
+
+interface SideStat extends Side {
+  is_active: boolean;
+  created_at: string;
+  total_count: number;
+  last_used: string | null;
+  is_favorite: boolean;
 }
 
 interface FavoriteSide {
@@ -155,7 +168,7 @@ interface FreqEntry {
   last_date: string;
 }
 
-type ViewMode = "week" | "recipes" | "stats" | "settings";
+type ViewMode = "week" | "recipes" | "sides" | "stats" | "settings";
 
 const DAYS_FR = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
 const DAYS_FULL = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"];
@@ -370,6 +383,9 @@ function App() {
             [
               { id: "week", label: "Semaine", icon: <CalendarDays size={14} /> },
               { id: "recipes", label: "Repas", icon: <UtensilsCrossed size={14} /> },
+              ...(canEdit
+                ? [{ id: "sides", label: "Accomp.", icon: <Salad size={14} /> }]
+                : []),
               { id: "stats", label: "Stats", icon: <BarChart2 size={14} /> },
               { id: "settings", label: "Paramètres", icon: <Settings size={14} /> },
             ] as { id: ViewMode; label: string; icon: React.ReactNode }[]
@@ -389,8 +405,9 @@ function App() {
       <div className="main-content">
         {view === "week" && <WeekScreen canEdit={canEdit} />}
         {view === "recipes" && <RecipesScreen canEdit={canEdit} />}
+        {view === "sides" && canEdit && <SidesScreen />}
         {view === "stats" && <StatsScreen />}
-        {view === "settings" && <SettingsScreen canAdmin={canAdmin} canEdit={canEdit} />}
+        {view === "settings" && <SettingsScreen canAdmin={canAdmin} />}
       </div>
     </div>
   );
@@ -1191,14 +1208,18 @@ function MealWizard({
 
 // ─── RecipesScreen ────────────────────────────────────────────────────────────
 
+type RecipeSortMode = "name" | "frequent" | "recent" | "stale" | "prep";
+
 function RecipesScreen({ canEdit }: { canEdit: boolean }) {
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [q, setQ] = useState("");
   const [filters, setFilters] = useState<Set<string>>(new Set());
+  const [sort, setSort] = useState<RecipeSortMode>("name");
   const [loading, setLoading] = useState(true);
   const [detail, setDetail] = useState<Recipe | null>(null);
   const [showAddLocal, setShowAddLocal] = useState(false);
   const filterTags = useFilterableTags();
+  const children = useChildren();
 
   useEffect(() => {
     api<Recipe[]>("/api/recipes?include_hidden=true")
@@ -1223,7 +1244,25 @@ function RecipesScreen({ canEdit }: { canEdit: boolean }) {
     for (const t of filterTags) {
       if (filters.has(t.id) && !hasTag(r, t.id)) return false;
     }
+    for (const c of children) {
+      if (filters.has(c.id) && !r.liked_by.includes(c.id)) return false;
+    }
     return true;
+  });
+
+  const sorted = [...filtered].sort((a, b) => {
+    switch (sort) {
+      case "frequent":
+        return (b.total_count ?? 0) - (a.total_count ?? 0);
+      case "recent":
+        return (b.last_used ?? "").localeCompare(a.last_used ?? "");
+      case "stale":
+        return (a.last_used ?? "").localeCompare(b.last_used ?? "");
+      case "prep":
+        return (a.prep_minutes ?? Infinity) - (b.prep_minutes ?? Infinity);
+      default:
+        return a.name.localeCompare(b.name);
+    }
   });
 
   return (
@@ -1260,15 +1299,34 @@ function RecipesScreen({ canEdit }: { canEdit: boolean }) {
             {t.name}
           </button>
         ))}
+        {children.map((c) => (
+          <button
+            key={c.id}
+            className={`filter-chip${filters.has(c.id) ? " active" : ""}`}
+            onClick={() => toggleFilter(c.id)}
+          >
+            {c.name}
+          </button>
+        ))}
+      </div>
+      <div className="sort-row">
+        <label htmlFor="recipe-sort">Trier :</label>
+        <select id="recipe-sort" value={sort} onChange={(e) => setSort(e.target.value as RecipeSortMode)}>
+          <option value="name">Nom (A-Z)</option>
+          <option value="frequent">Plus fréquent</option>
+          <option value="recent">Mangé récemment</option>
+          <option value="stale">Pas mangé depuis longtemps</option>
+          <option value="prep">Temps de préparation</option>
+        </select>
       </div>
       {loading ? (
         <div className="empty-state"><RefreshCw size={24} /></div>
       ) : (
         <div className="recipe-list">
-          {filtered.length === 0 && (
+          {sorted.length === 0 && (
             <div className="empty-state"><p>Aucune recette trouvée</p></div>
           )}
-          {filtered.map((r) => {
+          {sorted.map((r) => {
             const key = r.source === "mealie" ? `mealie-${r.slug}` : `local-${r.id}`;
             return (
               <div key={key} className="recipe-card" onClick={() => setDetail(r)}>
@@ -1278,6 +1336,19 @@ function RecipesScreen({ canEdit }: { canEdit: boolean }) {
                     {r.source === "mealie" ? "Mealie" : "Local"}
                   </span>
                 </div>
+                {r.tags.length > 0 && (
+                  <div className="recipe-card-tags">
+                    {r.tags.map((t) => (
+                      <span
+                        key={t.id}
+                        className="badge tag-badge"
+                        style={{ background: t.color || DEFAULT_TAG_COLOR, color: readableTextColor(t.color || DEFAULT_TAG_COLOR) }}
+                      >
+                        {t.name}
+                      </span>
+                    ))}
+                  </div>
+                )}
                 <div className="recipe-card-meta">
                   {r.makes_lunch && <span className="badge badge-lunch">Lunch</span>}
                   {r.is_weekend && <span className="badge badge-weekend">Weekend</span>}
@@ -1289,6 +1360,22 @@ function RecipesScreen({ canEdit }: { canEdit: boolean }) {
                       {Math.round(r.inventory_score.score * 100)}% dispo
                     </span>
                   )}
+                  {r.liked_by.length > 0 && (
+                    <span className="presence-tags">
+                      {r.liked_by.map((childId) => {
+                        const child = children.find((c) => c.id === childId);
+                        return (
+                          <span key={childId} className="presence-tag" title={child?.name ?? childId}>
+                            {child?.short_label ?? childId[0]?.toUpperCase()}
+                          </span>
+                        );
+                      })}
+                    </span>
+                  )}
+                  <span className="recipe-last">
+                    {r.last_used ? `${weeksAgo(r.last_used)}` : "Jamais mangé"}
+                    {r.total_count ? ` · ${r.total_count}×` : ""}
+                  </span>
                 </div>
               </div>
             );
@@ -1329,6 +1416,145 @@ function RecipesScreen({ canEdit }: { canEdit: boolean }) {
           }}
         />
       )}
+    </div>
+  );
+}
+
+// ─── SidesScreen ──────────────────────────────────────────────────────────────
+
+function SidesScreen() {
+  const [sides, setSides] = useState<SideStat[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [q, setQ] = useState("");
+  const [filters, setFilters] = useState<Set<string>>(new Set());
+  const [newName, setNewName] = useState("");
+  const [newCat, setNewCat] = useState("");
+
+  function load() {
+    setLoading(true);
+    api<SideStat[]>("/api/sides/stats").then(setSides).finally(() => setLoading(false));
+  }
+
+  useEffect(load, []);
+
+  function toggleFilter(f: string) {
+    setFilters((prev) => {
+      const n = new Set(prev);
+      n.has(f) ? n.delete(f) : n.add(f);
+      return n;
+    });
+  }
+
+  const showInactive = filters.has("inactifs");
+  const filtered = sides.filter((s) => {
+    if (s.is_active === showInactive) return false;
+    if (q && !s.name.toLowerCase().includes(q.toLowerCase())) return false;
+    if (filters.has("favoris") && !s.is_favorite) return false;
+    return true;
+  });
+
+  async function addSide() {
+    if (!newName.trim()) return;
+    await api<Side>("/api/sides", {
+      method: "POST",
+      body: JSON.stringify({ name: newName.trim(), category: newCat.trim() }),
+    });
+    setNewName("");
+    setNewCat("");
+    load();
+  }
+
+  async function renameSide(id: string, name: string) {
+    if (!name.trim()) return;
+    await api(`/api/sides/${id}`, { method: "PATCH", body: JSON.stringify({ name: name.trim() }) });
+    load();
+  }
+
+  async function toggleActive(s: SideStat) {
+    await api(`/api/sides/${s.id}`, { method: "PATCH", body: JSON.stringify({ is_active: !s.is_active }) });
+    load();
+  }
+
+  async function deleteSide(id: string) {
+    await api(`/api/sides/${id}`, { method: "DELETE" });
+    setSides((prev) => prev.filter((s) => s.id !== id));
+  }
+
+  return (
+    <div className="screen-pad">
+      <div className="search-bar">
+        <Search size={16} style={{ alignSelf: "center", color: "var(--muted)" }} />
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Rechercher un accompagnement…"
+        />
+      </div>
+      <div className="filter-chips">
+        {["favoris", "inactifs"].map((f) => (
+          <button
+            key={f}
+            className={`filter-chip${filters.has(f) ? " active" : ""}`}
+            onClick={() => toggleFilter(f)}
+          >
+            {f === "favoris" ? "Favoris" : "Désactivés"}
+          </button>
+        ))}
+      </div>
+      {loading ? (
+        <div className="empty-state"><RefreshCw size={24} className="spin" /></div>
+      ) : (
+        <div className="side-stat-list">
+          {filtered.length === 0 && (
+            <div className="empty-state"><p>Aucun accompagnement trouvé</p></div>
+          )}
+          {filtered.map((s) => (
+            <div key={s.id} className={`side-stat-row${s.is_active ? "" : " inactive"}`}>
+              <button
+                className="btn-icon"
+                onClick={() => toggleActive(s)}
+                title={s.is_active ? "Désactiver (n'apparaîtra plus dans les choix)" : "Activer"}
+              >
+                {s.is_active ? <Eye size={15} /> : <EyeOff size={15} />}
+              </button>
+              <div className="side-stat-main">
+                <input
+                  key={s.id + s.name}
+                  defaultValue={s.name}
+                  className="tag-name-input"
+                  onBlur={(e) => e.target.value !== s.name && renameSide(s.id, e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+                />
+                <div className="side-stat-meta">
+                  {s.is_favorite && <span className="badge badge-lunch">Favori</span>}
+                  {s.category && <span className="recipe-last">{s.category}</span>}
+                  <span className="recipe-last">
+                    {s.last_used ? `Dernière fois : ${weeksAgo(s.last_used)}` : "Jamais utilisé"}
+                  </span>
+                  <span className="recipe-last">{s.total_count} fois</span>
+                </div>
+              </div>
+              <button className="btn-icon" onClick={() => deleteSide(s.id)} title="Supprimer">
+                <X size={13} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="sides-add" style={{ marginTop: 12 }}>
+        <input
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+          placeholder="Nouvel accompagnement…"
+          onKeyDown={(e) => e.key === "Enter" && addSide()}
+        />
+        <input
+          value={newCat}
+          onChange={(e) => setNewCat(e.target.value)}
+          placeholder="Catégorie (optionnel)"
+        />
+        <button onClick={addSide}><Plus size={14} /></button>
+      </div>
     </div>
   );
 }
@@ -1804,12 +2030,11 @@ function StatsScreen() {
 
 // ─── SettingsScreen ───────────────────────────────────────────────────────────
 
-function SettingsScreen({ canAdmin, canEdit }: { canAdmin: boolean; canEdit: boolean }) {
+function SettingsScreen({ canAdmin }: { canAdmin: boolean }) {
   return (
     <div className="screen-pad">
       {canAdmin && <TagMappingsSection />}
       {canAdmin && <CanonicalTagsSection />}
-      {canEdit && <SidesLibrarySection />}
       <NotificationsSection />
     </div>
   );
@@ -1999,84 +2224,6 @@ function CanonicalTagsSection() {
           onKeyDown={(e) => e.key === "Enter" && addTag()}
         />
         <button onClick={addTag}><Plus size={14} /></button>
-      </div>
-    </div>
-  );
-}
-
-function SidesLibrarySection() {
-  const [sides, setSides] = useState<Side[]>([]);
-  const [newName, setNewName] = useState("");
-  const [newCat, setNewCat] = useState("");
-  const [editing, setEditing] = useState<Side | null>(null);
-
-  useEffect(() => {
-    api<Side[]>("/api/sides").then(setSides).catch(() => {});
-  }, []);
-
-  async function addSide() {
-    if (!newName.trim()) return;
-    const s = await api<Side>("/api/sides", {
-      method: "POST",
-      body: JSON.stringify({ name: newName.trim(), category: newCat.trim() }),
-    });
-    setSides((prev) => [...prev, s]);
-    setNewName("");
-    setNewCat("");
-  }
-
-  async function deleteSide(id: string) {
-    await api(`/api/sides/${id}`, { method: "DELETE" });
-    setSides((prev) => prev.filter((s) => s.id !== id));
-  }
-
-  const categories = [...new Set(sides.map((s) => s.category).filter(Boolean))];
-
-  return (
-    <div className="settings-section">
-      <h2>Bibliothèque d'accompagnements</h2>
-      {categories.length > 0 ? (
-        categories.map((cat) => (
-          <div key={cat} style={{ marginBottom: 12 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 6 }}>
-              {cat}
-            </div>
-            <div className="sides-list">
-              {sides.filter((s) => s.category === cat).map((s) => (
-                <span key={s.id} className="side-chip">
-                  {s.name}
-                  <button onClick={() => deleteSide(s.id)} title="Supprimer"><X size={11} /></button>
-                </span>
-              ))}
-            </div>
-          </div>
-        ))
-      ) : null}
-      {sides.filter((s) => !s.category).length > 0 && (
-        <div className="sides-list" style={{ marginBottom: 8 }}>
-          {sides.filter((s) => !s.category).map((s) => (
-            <span key={s.id} className="side-chip">
-              {s.name}
-              <button onClick={() => deleteSide(s.id)} title="Supprimer"><X size={11} /></button>
-            </span>
-          ))}
-        </div>
-      )}
-      <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-        <input
-          value={newName}
-          onChange={(e) => setNewName(e.target.value)}
-          placeholder="Accompagnement…"
-          style={{ flex: 2, border: "1px solid var(--line)", borderRadius: 6, padding: "6px 10px", fontSize: 13 }}
-          onKeyDown={(e) => e.key === "Enter" && addSide()}
-        />
-        <input
-          value={newCat}
-          onChange={(e) => setNewCat(e.target.value)}
-          placeholder="Catégorie (optionnel)"
-          style={{ flex: 1, border: "1px solid var(--line)", borderRadius: 6, padding: "6px 10px", fontSize: 13 }}
-        />
-        <button className="btn btn-primary" onClick={addSide}><Plus size={14} /></button>
       </div>
     </div>
   );
