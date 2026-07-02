@@ -568,6 +568,7 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
               </DroppableCard>
             );
           })}
+          <div className="week-grid-spacer" />
         </div>
 
         <DragOverlay>

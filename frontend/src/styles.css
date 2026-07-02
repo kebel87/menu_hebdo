@@ -214,6 +214,7 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  max-height: 84px;
   position: relative;
   transition: box-shadow .15s;
   cursor: pointer;
@@ -222,6 +223,10 @@ body {
   -webkit-user-select: none;
   user-select: none;
 }
+
+/* Absorbe l'espace libéré par le plafond de hauteur ci-dessus, pour que
+   dimanche ne finisse pas collé au bord bas (zone de geste iOS). */
+.week-grid-spacer { flex: 1; background: var(--bg); }
 .day-card:hover { z-index: 1; box-shadow: 0 0 0 1px var(--green); }
 .day-card.dragging-over { background: var(--green-soft); }
 .day-card.is-dragging { opacity: .5; }
@@ -543,12 +548,14 @@ body {
   }
   .day-card {
     flex: 1;
+    max-height: none;
     border-right: 1px solid var(--line);
   }
   .day-card:last-child { border-right: none; }
   .day-card-body { flex-direction: column; align-items: flex-start; padding: 8px 10px; }
   .meal-name { font-size: 12px; }
   .screen-pad { padding: 20px; }
+  .week-grid-spacer { display: none; }
 }
 
 /* ── iPhone: week-screen occupe toute la hauteur disponible ── */
@@ -556,4 +563,7 @@ body {
   display: flex;
   flex-direction: column;
   height: 100%;
+  /* Garde le dernier jour (dimanche) hors de la zone de geste iOS
+     (swipe-up pour changer d'app), sinon un drag y démarre trop près du bord. */
+  padding-bottom: max(10px, env(safe-area-inset-bottom));
 }
