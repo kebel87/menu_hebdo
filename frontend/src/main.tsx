@@ -350,7 +350,8 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
   const [plan, setPlan] = useState<MealPlan | null>(null);
   const [slots, setSlots] = useState<MealSlot[]>([]);
   const [loading, setLoading] = useState(false);
-  const [pickerDate, setPickerDate] = useState<string | null>(null);
+  const [dayActionDate, setDayActionDate] = useState<string | null>(null);
+  const [wizard, setWizard] = useState<{ date: string; mode: WizardMode } | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"week" | "month">("week");
@@ -447,27 +448,6 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
     } catch {}
   }
 
-  async function handleAssign(slotDate: string, recipe: Recipe) {
-    try {
-      const body: Record<string, unknown> = {
-        recipe_source: recipe.source,
-        recipe_name: recipe.name,
-        makes_lunch: recipe.makes_lunch,
-      };
-      if (recipe.source === "mealie") body.mealie_slug = recipe.slug;
-      if (recipe.source === "local") body.local_recipe_id = recipe.id;
-      const updated = await api<MealSlot>(`/api/week/${weekStart}/slot/${slotDate}`, {
-        method: "PUT",
-        body: JSON.stringify(body),
-      });
-      setSlots((prev) => [
-        ...prev.filter((s) => s.slot_date !== slotDate),
-        updated,
-      ]);
-    } catch {}
-    setPickerDate(null);
-  }
-
   async function handleClear(slotDate: string) {
     try {
       await api(`/api/week/${weekStart}/slot/${slotDate}`, { method: "DELETE" });
@@ -475,16 +455,37 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
     } catch {}
   }
 
-  async function handleSidesUpdate(slotId: string, sides: SlotSide[]) {
+  // Persiste le choix du wizard : recipe=null -> ne touche pas au repas,
+  // sides=null -> ne touche pas aux accompagnements.
+  async function handleWizardComplete(slotDate: string, recipe: Recipe | null, sides: SlotSide[] | null) {
     try {
-      const updated = await api<SlotSide[]>(`/api/slots/${slotId}/sides`, {
-        method: "PUT",
-        body: JSON.stringify(sides.map((s) => ({ side_id: s.side_id, free_text: s.free_text || s.name }))),
-      });
-      setSlots((prev) =>
-        prev.map((s) => (s.id === slotId ? { ...s, sides: updated } : s))
-      );
+      let updated: MealSlot | null = null;
+      if (recipe) {
+        const body: Record<string, unknown> = {
+          recipe_source: recipe.source,
+          recipe_name: recipe.name,
+          makes_lunch: recipe.makes_lunch,
+        };
+        if (recipe.source === "mealie") body.mealie_slug = recipe.slug;
+        if (recipe.source === "local") body.local_recipe_id = recipe.id;
+        updated = await api<MealSlot>(`/api/week/${weekStart}/slot/${slotDate}`, {
+          method: "PUT",
+          body: JSON.stringify(body),
+        });
+        setSlots((prev) => [...prev.filter((s) => s.slot_date !== slotDate), updated!]);
+      }
+      if (sides !== null) {
+        const slotId = updated?.id ?? slotByDate(slotDate)?.id;
+        if (slotId) {
+          const savedSides = await api<SlotSide[]>(`/api/slots/${slotId}/sides`, {
+            method: "PUT",
+            body: JSON.stringify(sides.map((s) => ({ side_id: s.side_id, free_text: s.free_text || s.name }))),
+          });
+          setSlots((prev) => prev.map((s) => (s.id === slotId ? { ...s, sides: savedSides } : s)));
+        }
+      }
     } catch {}
+    setWizard(null);
   }
 
   return (
@@ -545,7 +546,11 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
             const slot = slotByDate(iso);
             const isToday = iso === toIso(today);
             const isOver = overId === `drop-${iso}`;
-            const openPicker = () => canEdit && setPickerDate(iso);
+            const openPicker = () => {
+              if (!canEdit) return;
+              if (slot) setDayActionDate(iso);
+              else setWizard({ date: iso, mode: "new" });
+            };
 
             return (
               <DroppableCard key={iso} slotDate={iso} isOver={isOver}>
@@ -621,17 +626,30 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
       </DndContext>
       )}
 
-      {pickerDate && (
-        <RecipePicker
-          date={pickerDate}
-          slot={slotByDate(pickerDate)}
-          canEdit={canEdit}
-          onSelect={(r) => handleAssign(pickerDate, r)}
-          onSidesUpdate={(sides) => {
-            const slot = slotByDate(pickerDate);
-            if (slot) handleSidesUpdate(slot.id, sides);
+      {dayActionDate && slotByDate(dayActionDate) && (
+        <DayActionModal
+          date={dayActionDate}
+          slot={slotByDate(dayActionDate)!}
+          onClose={() => setDayActionDate(null)}
+          onChoose={(mode) => {
+            setDayActionDate(null);
+            if (mode === "reset") {
+              handleClear(dayActionDate);
+              return;
+            }
+            setWizard({ date: dayActionDate, mode });
           }}
-          onClose={() => setPickerDate(null)}
+        />
+      )}
+
+      {wizard && (
+        <MealWizard
+          date={wizard.date}
+          slot={slotByDate(wizard.date)}
+          mode={wizard.mode}
+          canEdit={canEdit}
+          onComplete={(recipe, sides) => handleWizardComplete(wizard.date, recipe, sides)}
+          onClose={() => setWizard(null)}
         />
       )}
 
@@ -736,17 +754,25 @@ function DatePickerModal({
   );
 }
 
-// ─── SidesPanel ───────────────────────────────────────────────────────────────
+// ─── StepIndicator ("station de métro") ────────────────────────────────────────
 
-function SidesPanel({
-  slot,
-  canEdit,
-  onUpdate,
-}: {
-  slot: MealSlot;
-  canEdit: boolean;
-  onUpdate: (sides: SlotSide[]) => void;
-}) {
+function StepIndicator({ steps, current }: { steps: string[]; current: number }) {
+  return (
+    <div className="step-indicator">
+      {steps.map((label, i) => (
+        <div key={label} className={`step${i === current ? " active" : ""}${i < current ? " done" : ""}`}>
+          <span className="step-dot">{i < current ? <CheckCircle size={12} /> : i + 1}</span>
+          <span className="step-label">{label}</span>
+          {i < steps.length - 1 && <span className="step-line" />}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── SidesEditor (état local, rien n'est persisté avant la confirmation) ───────
+
+function SidesEditor({ sides, onChange }: { sides: SlotSide[]; onChange: (s: SlotSide[]) => void }) {
   const [input, setInput] = useState("");
   const [libSides, setLibSides] = useState<Side[]>([]);
 
@@ -759,55 +785,50 @@ function SidesPanel({
     : libSides.slice(0, 5);
 
   function addSide(name: string, sideId?: string) {
-    const newSide: SlotSide = {
+    onChange([...sides, {
       id: `tmp-${Date.now()}`,
       side_id: sideId,
       name,
       free_text: sideId ? "" : name,
       category: libSides.find((s) => s.id === sideId)?.category ?? "",
-      sort_order: slot.sides.length,
-    };
-    onUpdate([...slot.sides, newSide]);
+      sort_order: sides.length,
+    }]);
     setInput("");
   }
 
   function removeSide(sideId: string) {
-    onUpdate(slot.sides.filter((s) => s.id !== sideId));
+    onChange(sides.filter((s) => s.id !== sideId));
   }
 
   return (
-    <div className="sides-panel" onClick={(e) => e.stopPropagation()}>
+    <div>
       <div className="sides-list">
-        {slot.sides.map((s) => (
+        {sides.map((s) => (
           <span key={s.id} className="side-chip">
             {s.name}
-            {canEdit && (
-              <button onClick={() => removeSide(s.id)} title="Retirer">
-                <X size={11} />
-              </button>
-            )}
+            <button onClick={() => removeSide(s.id)} title="Retirer">
+              <X size={11} />
+            </button>
           </span>
         ))}
-        {slot.sides.length === 0 && (
+        {sides.length === 0 && (
           <span style={{ fontSize: 12, color: "var(--muted)" }}>Aucun accompagnement</span>
         )}
       </div>
-      {canEdit && (
-        <div className="sides-add">
-          <input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Ajouter un accompagnement…"
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && input.trim()) addSide(input.trim());
-            }}
-          />
-          <button onClick={() => input.trim() && addSide(input.trim())}>
-            <Plus size={14} />
-          </button>
-        </div>
-      )}
-      {canEdit && input && suggestions.length > 0 && (
+      <div className="sides-add">
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder="Ajouter un accompagnement…"
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && input.trim()) addSide(input.trim());
+          }}
+        />
+        <button onClick={() => input.trim() && addSide(input.trim())}>
+          <Plus size={14} />
+        </button>
+      </div>
+      {input && suggestions.length > 0 && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
           {suggestions.map((s) => (
             <button
@@ -824,23 +845,75 @@ function SidesPanel({
   );
 }
 
-// ─── RecipePicker (modal) ─────────────────────────────────────────────────────
+// ─── DayActionModal (jour déjà renseigné : que veut-on modifier ?) ────────────
 
-function RecipePicker({
+function DayActionModal({
   date,
   slot,
+  onClose,
+  onChoose,
+}: {
+  date: string;
+  slot: MealSlot;
+  onClose: () => void;
+  onChoose: (mode: "meal" | "sides" | "both" | "reset") => void;
+}) {
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", alignItems: "center", marginBottom: 12 }}>
+          <span className="modal-title" style={{ flex: 1 }}>{fmtDateFull(date)}</span>
+          <button className="btn-icon" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontWeight: 700, fontSize: 15 }}>{slot.recipe_name}</div>
+          <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
+            {slot.sides.length > 0 ? slot.sides.map((s) => s.name).join(", ") : "Aucun accompagnement"}
+          </div>
+        </div>
+        <div className="day-action-list">
+          <button className="btn btn-secondary day-action-btn" onClick={() => onChoose("meal")}>
+            Modifier le repas
+          </button>
+          <button className="btn btn-secondary day-action-btn" onClick={() => onChoose("sides")}>
+            Modifier l'accompagnement
+          </button>
+          <button className="btn btn-secondary day-action-btn" onClick={() => onChoose("both")}>
+            Modifier le repas et l'accompagnement
+          </button>
+          <button className="btn btn-danger day-action-btn" onClick={() => onChoose("reset")}>
+            Remettre à zéro
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── MealWizard (modal, choix du repas puis de l'accompagnement) ──────────────
+
+type WizardMode = "new" | "meal" | "sides" | "both";
+
+function MealWizard({
+  date,
+  slot,
+  mode,
   canEdit,
-  onSelect,
-  onSidesUpdate,
+  onComplete,
   onClose,
 }: {
   date: string;
   slot?: MealSlot;
+  mode: WizardMode;
   canEdit: boolean;
-  onSelect: (r: Recipe) => void;
-  onSidesUpdate: (sides: SlotSide[]) => void;
+  onComplete: (recipe: Recipe | null, sides: SlotSide[] | null) => void;
   onClose: () => void;
 }) {
+  const [step, setStep] = useState<"meal" | "sides" | "confirm">(mode === "sides" ? "sides" : "meal");
+  const [chosenRecipe, setChosenRecipe] = useState<Recipe | null>(null);
+  const [chosenSides, setChosenSides] = useState<SlotSide[]>(
+    mode === "meal" || mode === "sides" ? (slot?.sides ?? []) : []
+  );
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [q, setQ] = useState("");
   const [filters, setFilters] = useState<Set<string>>(new Set());
@@ -848,11 +921,12 @@ function RecipePicker({
   const filterTags = useFilterableTags();
 
   useEffect(() => {
+    if (mode === "sides") return;
     setLoading(true);
     api<Recipe[]>("/api/recipes")
       .then(setRecipes)
       .finally(() => setLoading(false));
-  }, []);
+  }, [mode]);
 
   function toggleFilter(f: string) {
     setFilters((prev) => {
@@ -872,76 +946,148 @@ function RecipePicker({
     return true;
   });
 
+  function pickMeal(r: Recipe) {
+    setChosenRecipe(r);
+    if (mode === "meal") {
+      // Le repas seul change : on garde l'accompagnement existant, étape sides sautée.
+      setStep("confirm");
+    } else {
+      setChosenSides([]);
+      setStep("sides");
+    }
+  }
+
+  function handleConfirm() {
+    const recipeToSave = mode === "sides" ? null : chosenRecipe;
+    const sidesToSave = mode === "meal" ? null : chosenSides;
+    onComplete(recipeToSave, sidesToSave);
+  }
+
+  const steps = mode === "meal" ? ["Repas", "Confirmer"]
+    : mode === "sides" ? ["Accompagnement", "Confirmer"]
+    : ["Repas", "Accompagnement", "Confirmer"];
+  const currentIndex = step === "confirm" ? steps.length - 1
+    : step === "sides" ? (mode === "sides" ? 0 : 1)
+    : 0;
+
+  const confirmRecipeName = mode === "sides" ? slot?.recipe_name : chosenRecipe?.name;
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", alignItems: "center", marginBottom: 12 }}>
           <span className="modal-title" style={{ flex: 1 }}>
-            Choisir un repas — {fmtDateFull(date)}
+            {mode === "sides" ? "Choisir l'accompagnement" : "Choisir un repas"} — {fmtDateFull(date)}
           </span>
           <button className="btn-icon" onClick={onClose}><X size={18} /></button>
         </div>
-        {slot && (
-          <SidesPanel slot={slot} canEdit={canEdit} onUpdate={onSidesUpdate} />
-        )}
-        <div className="search-bar">
-          <Search size={16} style={{ alignSelf: "center", color: "var(--muted)" }} />
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Rechercher une recette…"
-          />
-        </div>
-        <div className="filter-chips">
-          {["dispo", "rapide"].map((f) => (
-            <button
-              key={f}
-              className={`filter-chip${filters.has(f) ? " active" : ""}`}
-              onClick={() => toggleFilter(f)}
-            >
-              {f === "dispo" ? "Disponible" : "< 30 min"}
-            </button>
-          ))}
-          {filterTags.map((t) => (
-            <button
-              key={t.id}
-              className={`filter-chip${filters.has(t.id) ? " active" : ""}`}
-              onClick={() => toggleFilter(t.id)}
-            >
-              {t.name}
-            </button>
-          ))}
-        </div>
-        {loading ? (
-          <div className="empty-state"><RefreshCw size={24} className="spin" /></div>
-        ) : (
-          <div className="recipe-list">
-            {filtered.length === 0 && (
-              <div className="empty-state"><p>Aucune recette trouvée</p></div>
+        <StepIndicator steps={steps} current={currentIndex} />
+
+        {step === "meal" && (
+          <>
+            <div className="search-bar">
+              <Search size={16} style={{ alignSelf: "center", color: "var(--muted)" }} />
+              <input
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Rechercher une recette…"
+              />
+            </div>
+            <div className="filter-chips">
+              {["dispo", "rapide"].map((f) => (
+                <button
+                  key={f}
+                  className={`filter-chip${filters.has(f) ? " active" : ""}`}
+                  onClick={() => toggleFilter(f)}
+                >
+                  {f === "dispo" ? "Disponible" : "< 30 min"}
+                </button>
+              ))}
+              {filterTags.map((t) => (
+                <button
+                  key={t.id}
+                  className={`filter-chip${filters.has(t.id) ? " active" : ""}`}
+                  onClick={() => toggleFilter(t.id)}
+                >
+                  {t.name}
+                </button>
+              ))}
+            </div>
+            {loading ? (
+              <div className="empty-state"><RefreshCw size={24} className="spin" /></div>
+            ) : (
+              <div className="recipe-list">
+                {filtered.length === 0 && (
+                  <div className="empty-state"><p>Aucune recette trouvée</p></div>
+                )}
+                {filtered.map((r) => {
+                  const key = r.source === "mealie" ? `mealie-${r.slug}` : `local-${r.id}`;
+                  return (
+                    <div key={key} className="recipe-card" onClick={() => pickMeal(r)}>
+                      <div className="recipe-card-header">
+                        <span className="recipe-card-name">{r.name}</span>
+                      </div>
+                      <div className="recipe-card-meta">
+                        {r.makes_lunch && <span className="badge badge-lunch">Lunch</span>}
+                        {r.is_weekend && <span className="badge badge-weekend">Weekend</span>}
+                        {r.prep_minutes && (
+                          <span className="recipe-last">{r.prep_minutes} min</span>
+                        )}
+                        {r.inventory_score?.score !== null && r.inventory_score?.score !== undefined && (
+                          <span className={`badge ${scoreClass(r.inventory_score.score)}`}>
+                            {Math.round(r.inventory_score.score * 100)}%
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             )}
-            {filtered.map((r) => {
-              const key = r.source === "mealie" ? `mealie-${r.slug}` : `local-${r.id}`;
-              return (
-                <div key={key} className="recipe-card" onClick={() => onSelect(r)}>
-                  <div className="recipe-card-header">
-                    <span className="recipe-card-name">{r.name}</span>
-                  </div>
-                  <div className="recipe-card-meta">
-                    {r.makes_lunch && <span className="badge badge-lunch">Lunch</span>}
-                    {r.is_weekend && <span className="badge badge-weekend">Weekend</span>}
-                    {r.prep_minutes && (
-                      <span className="recipe-last">{r.prep_minutes} min</span>
-                    )}
-                    {r.inventory_score?.score !== null && r.inventory_score?.score !== undefined && (
-                      <span className={`badge ${scoreClass(r.inventory_score.score)}`}>
-                        {Math.round(r.inventory_score.score * 100)}%
-                      </span>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          </>
+        )}
+
+        {step === "sides" && (
+          <>
+            <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 10 }}>
+              {mode === "sides" ? slot?.recipe_name : chosenRecipe?.name}
+            </div>
+            <SidesEditor sides={chosenSides} onChange={setChosenSides} />
+            <div className="form-actions">
+              <button
+                className="btn btn-secondary"
+                onClick={() => { setChosenSides([]); setStep("confirm"); }}
+              >
+                Aucun accompagnement
+              </button>
+              <button className="btn btn-primary" onClick={() => setStep("confirm")}>
+                Continuer
+              </button>
+            </div>
+          </>
+        )}
+
+        {step === "confirm" && (
+          <>
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontWeight: 700, fontSize: 15 }}>{confirmRecipeName}</div>
+              <div className="sides-list" style={{ marginTop: 6 }}>
+                {chosenSides.length === 0 ? (
+                  <span style={{ fontSize: 12, color: "var(--muted)" }}>Aucun accompagnement</span>
+                ) : (
+                  chosenSides.map((s) => (
+                    <span key={s.id} className="side-chip">{s.name}</span>
+                  ))
+                )}
+              </div>
+            </div>
+            <div className="form-actions" style={{ justifyContent: "space-between" }}>
+              <button className="btn btn-danger btn-sm" onClick={onClose}>Annuler</button>
+              <button className="btn btn-primary" onClick={handleConfirm} disabled={!canEdit}>
+                Confirmer
+              </button>
+            </div>
+          </>
         )}
       </div>
     </div>
