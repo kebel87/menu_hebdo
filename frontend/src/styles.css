@@ -368,6 +368,7 @@ body {
   font-size: 14px;
   background: var(--panel);
 }
+.btn-icon.tag-filter-active { color: var(--green); background: var(--green-soft); }
 
 /* ── Sides expand panel ── */
 .sides-panel {

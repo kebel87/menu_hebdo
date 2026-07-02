@@ -26,6 +26,7 @@ import {
   CheckCircle,
   Bell,
   BellOff,
+  Filter,
 } from "lucide-react";
 import "./styles.css";
 
@@ -110,6 +111,7 @@ interface CanonicalTag {
   name: string;
   description: string;
   color: string;
+  is_filter: boolean;
 }
 
 interface TagMapping {
@@ -158,6 +160,20 @@ function readableTextColor(hex: string): string {
   const b = parseInt(full.slice(4, 6), 16) || 0;
   const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
   return luminance > 0.6 ? "#242826" : "#ffffff";
+}
+
+function useFilterableTags(): CanonicalTag[] {
+  const [tags, setTags] = useState<CanonicalTag[]>([]);
+  useEffect(() => {
+    api<CanonicalTag[]>("/api/tags")
+      .then((t) => setTags(t.filter((x) => x.is_filter).sort((a, b) => a.name.localeCompare(b.name))))
+      .catch(() => {});
+  }, []);
+  return tags;
+}
+
+function hasTag(r: Recipe, tagId: string): boolean {
+  return r.tags.some((t) => t.id === tagId);
 }
 
 function mondayOf(d: Date): Date {
@@ -829,6 +845,7 @@ function RecipePicker({
   const [q, setQ] = useState("");
   const [filters, setFilters] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
+  const filterTags = useFilterableTags();
 
   useEffect(() => {
     setLoading(true);
@@ -847,10 +864,11 @@ function RecipePicker({
 
   const filtered = recipes.filter((r) => {
     if (q && !r.name.toLowerCase().includes(q.toLowerCase())) return false;
-    if (filters.has("weekend") && !r.is_weekend) return false;
-    if (filters.has("lunchs") && !r.makes_lunch) return false;
     if (filters.has("rapide") && (!r.prep_minutes || r.prep_minutes > 30)) return false;
     if (filters.has("dispo") && (r.inventory_score?.score ?? 0) < 0.8) return false;
+    for (const t of filterTags) {
+      if (filters.has(t.id) && !hasTag(r, t.id)) return false;
+    }
     return true;
   });
 
@@ -875,13 +893,22 @@ function RecipePicker({
           />
         </div>
         <div className="filter-chips">
-          {["dispo", "weekend", "lunchs", "rapide"].map((f) => (
+          {["dispo", "rapide"].map((f) => (
             <button
               key={f}
               className={`filter-chip${filters.has(f) ? " active" : ""}`}
               onClick={() => toggleFilter(f)}
             >
-              {f === "dispo" ? "Disponible" : f === "lunchs" ? "Fait des lunchs" : f === "rapide" ? "< 30 min" : "Week-end"}
+              {f === "dispo" ? "Disponible" : "< 30 min"}
+            </button>
+          ))}
+          {filterTags.map((t) => (
+            <button
+              key={t.id}
+              className={`filter-chip${filters.has(t.id) ? " active" : ""}`}
+              onClick={() => toggleFilter(t.id)}
+            >
+              {t.name}
             </button>
           ))}
         </div>
@@ -930,6 +957,7 @@ function RecipesScreen({ canEdit }: { canEdit: boolean }) {
   const [loading, setLoading] = useState(true);
   const [detail, setDetail] = useState<Recipe | null>(null);
   const [showAddLocal, setShowAddLocal] = useState(false);
+  const filterTags = useFilterableTags();
 
   useEffect(() => {
     api<Recipe[]>("/api/recipes?include_hidden=true")
@@ -949,10 +977,11 @@ function RecipesScreen({ canEdit }: { canEdit: boolean }) {
   const filtered = recipes.filter((r) => {
     if (r.is_hidden !== showHidden) return false;
     if (q && !r.name.toLowerCase().includes(q.toLowerCase())) return false;
-    if (filters.has("weekend") && !r.is_weekend) return false;
-    if (filters.has("lunchs") && !r.makes_lunch) return false;
     if (filters.has("rapide") && (!r.prep_minutes || r.prep_minutes > 30)) return false;
     if (filters.has("dispo") && (r.inventory_score?.score ?? 0) < 0.8) return false;
+    for (const t of filterTags) {
+      if (filters.has(t.id) && !hasTag(r, t.id)) return false;
+    }
     return true;
   });
 
@@ -972,13 +1001,22 @@ function RecipesScreen({ canEdit }: { canEdit: boolean }) {
         )}
       </div>
       <div className="filter-chips">
-        {["dispo", "weekend", "lunchs", "rapide", "masquees"].map((f) => (
+        {["dispo", "rapide", "masquees"].map((f) => (
           <button
             key={f}
             className={`filter-chip${filters.has(f) ? " active" : ""}`}
             onClick={() => toggleFilter(f)}
           >
-            {f === "dispo" ? "Disponible" : f === "lunchs" ? "Fait des lunchs" : f === "rapide" ? "< 30 min" : f === "masquees" ? "Masquées" : "Week-end"}
+            {f === "dispo" ? "Disponible" : f === "rapide" ? "< 30 min" : "Masquées"}
+          </button>
+        ))}
+        {filterTags.map((t) => (
+          <button
+            key={t.id}
+            className={`filter-chip${filters.has(t.id) ? " active" : ""}`}
+            onClick={() => toggleFilter(t.id)}
+          >
+            {t.name}
           </button>
         ))}
       </div>
@@ -1069,6 +1107,8 @@ function RecipeDetailModal({
   onUpdated: (r: Recipe) => void;
   onDeleted: () => void;
 }) {
+  const [name, setName] = useState(recipe.name);
+  const [prep, setPrep] = useState(recipe.prep_minutes?.toString() ?? "");
   const [isWeekend, setIsWeekend] = useState(recipe.is_weekend);
   const [makesLunch, setMakesLunch] = useState(recipe.makes_lunch);
   const [isHidden, setIsHidden] = useState(recipe.is_hidden);
@@ -1095,7 +1135,13 @@ function RecipeDetailModal({
       } else if (recipe.source === "local" && recipe.id) {
         const updated = await api<Recipe>(`/api/local-recipes/${recipe.id}`, {
           method: "PATCH",
-          body: JSON.stringify({ is_weekend: isWeekend, makes_lunch: makesLunch, tag_ids: tagIds }),
+          body: JSON.stringify({
+            name: name.trim(),
+            prep_minutes: prep ? parseInt(prep) : null,
+            is_weekend: isWeekend,
+            makes_lunch: makesLunch,
+            tag_ids: tagIds,
+          }),
         });
         onUpdated({ ...recipe, ...updated, source: "local" });
       }
@@ -1115,7 +1161,7 @@ function RecipeDetailModal({
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", alignItems: "center", marginBottom: 12 }}>
-          <span className="modal-title" style={{ flex: 1 }}>{recipe.name}</span>
+          <span className="modal-title" style={{ flex: 1 }}>{recipe.source === "local" ? name : recipe.name}</span>
           <button className="btn-icon" onClick={onClose}><X size={18} /></button>
         </div>
         <div style={{ marginBottom: 12 }}>
@@ -1138,8 +1184,38 @@ function RecipeDetailModal({
             )}
           </div>
         )}
+        {recipe.source === "mealie" && recipe.tags.length > 0 && (
+          <div style={{ marginBottom: 12 }}>
+            <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "var(--muted)", marginBottom: 4 }}>
+              Tags canoniques (via Paramètres → Tags Mealie → Tags canoniques)
+            </label>
+            <div className="day-badges" style={{ flexWrap: "wrap" }}>
+              {recipe.tags.map((t) => (
+                <span
+                  key={t.id}
+                  className="badge tag-badge"
+                  style={{ background: t.color || DEFAULT_TAG_COLOR, color: readableTextColor(t.color || DEFAULT_TAG_COLOR) }}
+                >
+                  {t.name}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
         {canEdit && (
           <>
+            {recipe.source === "local" && (
+              <div className="form-row">
+                <label>Nom</label>
+                <input value={name} onChange={(e) => setName(e.target.value)} />
+              </div>
+            )}
+            {recipe.source === "local" && (
+              <div className="form-row">
+                <label>Temps de préparation (min)</label>
+                <input type="number" value={prep} onChange={(e) => setPrep(e.target.value)} min="0" />
+              </div>
+            )}
             <div className="form-row">
               <label>
                 <input
@@ -1197,7 +1273,11 @@ function RecipeDetailModal({
                 </button>
               )}
               <button className="btn btn-secondary" onClick={onClose}>Annuler</button>
-              <button className="btn btn-primary" onClick={save} disabled={saving}>
+              <button
+                className="btn btn-primary"
+                onClick={save}
+                disabled={saving || (recipe.source === "local" && !name.trim())}
+              >
                 {saving ? "…" : "Enregistrer"}
               </button>
             </div>
@@ -1571,6 +1651,14 @@ function CanonicalTagsSection() {
     setTags((prev) => prev.map((x) => (x.id === id ? t : x)));
   }
 
+  async function toggleTagFilter(id: string, isFilter: boolean) {
+    const t = await api<CanonicalTag>(`/api/tags/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ is_filter: isFilter }),
+    });
+    setTags((prev) => prev.map((x) => (x.id === id ? t : x)));
+  }
+
   async function deleteTag(id: string) {
     await api(`/api/tags/${id}`, { method: "DELETE" });
     setTags((prev) => prev.filter((t) => t.id !== id));
@@ -1596,6 +1684,13 @@ function CanonicalTagsSection() {
               onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
               className="tag-name-input"
             />
+            <button
+              className={`btn-icon${t.is_filter ? " tag-filter-active" : ""}`}
+              onClick={() => toggleTagFilter(t.id, !t.is_filter)}
+              title={t.is_filter ? "Filtre actif dans l'onglet Repas (cliquer pour désactiver)" : "Afficher comme filtre dans l'onglet Repas"}
+            >
+              <Filter size={13} />
+            </button>
             <button className="btn-icon" onClick={() => deleteTag(t.id)} title="Supprimer">
               <X size={13} />
             </button>

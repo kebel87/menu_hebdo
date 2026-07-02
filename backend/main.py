@@ -476,7 +476,9 @@ def api_create_tag(
     name = body.get("name", "").strip()
     if not name:
         raise HTTPException(status_code=422, detail="name requis")
-    return create_canonical_tag(name, body.get("description", ""), body.get("color", ""))
+    return create_canonical_tag(
+        name, body.get("description", ""), body.get("color", ""), body.get("is_filter", False)
+    )
 
 
 @app.patch("/api/tags/{tag_id}")
@@ -486,7 +488,9 @@ def api_update_tag(
     actor: Actor = Depends(require_permission("settings.manage")),
 ) -> dict:
     try:
-        return update_canonical_tag(tag_id, name=body.get("name"), color=body.get("color"))
+        return update_canonical_tag(
+            tag_id, name=body.get("name"), color=body.get("color"), is_filter=body.get("is_filter")
+        )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 

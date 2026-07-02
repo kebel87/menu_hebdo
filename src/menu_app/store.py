@@ -61,6 +61,36 @@ def _apply_migrations(db: sqlite3.Connection) -> None:
     tag_cols = {row[1] for row in db.execute("PRAGMA table_info(canonical_tags)").fetchall()}
     if "color" not in tag_cols:
         db.execute("ALTER TABLE canonical_tags ADD COLUMN color TEXT NOT NULL DEFAULT ''")
+    tag_cols = {row[1] for row in db.execute("PRAGMA table_info(canonical_tags)").fetchall()}
+    if "is_filter" not in tag_cols:
+        db.execute("ALTER TABLE canonical_tags ADD COLUMN is_filter INTEGER NOT NULL DEFAULT 0")
+        db.execute("UPDATE canonical_tags SET is_filter=1 WHERE name IN ('weekend', 'lunchs')")
+        _backfill_weekend_lunch_tags(db)
+
+
+def _backfill_weekend_lunch_tags(db: sqlite3.Connection) -> None:
+    """Recettes locales déjà marquées via les cases is_weekend/makes_lunch : on
+    leur ajoute le tag canonique correspondant pour qu'elles ne disparaissent
+    pas des filtres (désormais basés sur les tags, plus sur ces booléens)."""
+    tag_id_by_name = {
+        r["name"]: r["id"]
+        for r in db.execute("SELECT id, name FROM canonical_tags WHERE name IN ('weekend', 'lunchs')").fetchall()
+    }
+    weekend_id = tag_id_by_name.get("weekend")
+    lunchs_id = tag_id_by_name.get("lunchs")
+    if not weekend_id and not lunchs_id:
+        return
+    for r in db.execute("SELECT id, tags_json, is_weekend, makes_lunch FROM local_recipes").fetchall():
+        ids = set(json.loads(r["tags_json"] or "[]"))
+        changed = False
+        if weekend_id and r["is_weekend"] and weekend_id not in ids:
+            ids.add(weekend_id)
+            changed = True
+        if lunchs_id and r["makes_lunch"] and lunchs_id not in ids:
+            ids.add(lunchs_id)
+            changed = True
+        if changed:
+            db.execute("UPDATE local_recipes SET tags_json=? WHERE id=?", (json.dumps(list(ids)), r["id"]))
 
 
 def _create_tables(db: sqlite3.Connection) -> None:
@@ -608,31 +638,43 @@ def upsert_recipe_meta(
 # canonical_tags
 # ---------------------------------------------------------------------------
 
+def _boolify_tag(tag: dict[str, Any]) -> dict[str, Any]:
+    tag["is_filter"] = bool(tag.get("is_filter"))
+    return tag
+
+
 def list_canonical_tags() -> list[dict[str, Any]]:
     with connect() as db:
         rows = db.execute("SELECT * FROM canonical_tags ORDER BY name").fetchall()
-        return [dict(r) for r in rows]
+        return [_boolify_tag(dict(r)) for r in rows]
 
 
-def create_canonical_tag(name: str, description: str = "", color: str = "") -> dict[str, Any]:
+def create_canonical_tag(
+    name: str, description: str = "", color: str = "", is_filter: bool = False
+) -> dict[str, Any]:
     with connect() as db:
         tag_id = new_id()
         now = now_iso()
         db.execute(
-            "INSERT INTO canonical_tags (id, name, description, color, created_at) VALUES (?,?,?,?,?)",
-            (tag_id, name.strip(), description.strip(), color.strip(), now),
+            """INSERT INTO canonical_tags (id, name, description, color, is_filter, created_at)
+               VALUES (?,?,?,?,?,?)""",
+            (tag_id, name.strip(), description.strip(), color.strip(), int(is_filter), now),
         )
-        return {"id": tag_id, "name": name.strip(), "description": description.strip(),
-                "color": color.strip(), "created_at": now}
+        row = db.execute("SELECT * FROM canonical_tags WHERE id=?", (tag_id,)).fetchone()
+        return _boolify_tag(dict(row))
 
 
-def update_canonical_tag(tag_id: str, name: str | None = None, color: str | None = None) -> dict[str, Any]:
+def update_canonical_tag(
+    tag_id: str, name: str | None = None, color: str | None = None, is_filter: bool | None = None
+) -> dict[str, Any]:
     with connect() as db:
         updates: list[tuple[str, Any]] = []
         if name is not None and name.strip():
             updates.append(("name", name.strip()))
         if color is not None:
             updates.append(("color", color.strip()))
+        if is_filter is not None:
+            updates.append(("is_filter", int(is_filter)))
         if updates:
             set_clause = ", ".join(f"{k}=?" for k, _ in updates)
             values = [v for _, v in updates] + [tag_id]
@@ -640,7 +682,7 @@ def update_canonical_tag(tag_id: str, name: str | None = None, color: str | None
         row = db.execute("SELECT * FROM canonical_tags WHERE id=?", (tag_id,)).fetchone()
         if not row:
             raise ValueError("Tag introuvable")
-        return dict(row)
+        return _boolify_tag(dict(row))
 
 
 def delete_canonical_tag(tag_id: str) -> None:
