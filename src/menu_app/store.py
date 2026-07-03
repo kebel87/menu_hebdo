@@ -121,6 +121,8 @@ def _apply_migrations(db: sqlite3.Connection) -> None:
     for obsolete_col in ("cuisine", "address", "phone", "website", "notes"):
         if obsolete_col in context_cols:
             db.execute(f"ALTER TABLE meal_contexts DROP COLUMN {obsolete_col}")
+    db.execute("UPDATE meal_contexts SET kind='people' WHERE kind IN ('away', 'hosting')")
+    _merge_duplicate_meal_contexts(db)
     slot_cols = {row[1] for row in db.execute("PRAGMA table_info(meal_slots)").fetchall()}
     if "slot_kind" not in slot_cols:
         db.execute("ALTER TABLE meal_slots ADD COLUMN slot_kind TEXT NOT NULL DEFAULT 'recipe'")
@@ -151,6 +153,23 @@ def _backfill_weekend_lunch_tags(db: sqlite3.Connection) -> None:
             changed = True
         if changed:
             db.execute("UPDATE local_recipes SET tags_json=? WHERE id=?", (json.dumps(list(ids)), r["id"]))
+
+
+def _merge_duplicate_meal_contexts(db: sqlite3.Connection) -> None:
+    rows = db.execute(
+        """SELECT kind, lower(trim(name)) as normalized_name, GROUP_CONCAT(id) as ids
+           FROM meal_contexts
+           GROUP BY kind, lower(trim(name))
+           HAVING COUNT(*) > 1"""
+    ).fetchall()
+    for row in rows:
+        ids = [context_id for context_id in row["ids"].split(",") if context_id]
+        if len(ids) < 2:
+            continue
+        keeper = ids[0]
+        for duplicate_id in ids[1:]:
+            db.execute("UPDATE meal_slots SET context_id=? WHERE context_id=?", (keeper, duplicate_id))
+            db.execute("DELETE FROM meal_contexts WHERE id=?", (duplicate_id,))
 
 
 def _create_tables(db: sqlite3.Connection) -> None:
@@ -557,6 +576,18 @@ def create_meal_context(
     name: str,
 ) -> dict[str, Any]:
     with connect() as db:
+        normalized_name = name.strip()
+        existing = db.execute(
+            "SELECT * FROM meal_contexts WHERE kind=? AND lower(name)=lower(?)",
+            (kind, normalized_name),
+        ).fetchone()
+        if existing:
+            db.execute(
+                "UPDATE meal_contexts SET is_active=1, updated_at=? WHERE id=?",
+                (now_iso(), existing["id"]),
+            )
+            row = db.execute("SELECT * FROM meal_contexts WHERE id=?", (existing["id"],)).fetchone()
+            return _boolify_context(dict(row))
         context_id = new_id()
         now = now_iso()
         db.execute(
@@ -587,6 +618,14 @@ def update_meal_context(context_id: str, payload: dict[str, Any]) -> dict[str, A
         row = db.execute("SELECT * FROM meal_contexts WHERE id=?", (context_id,)).fetchone()
         if not row:
             raise ValueError("Contexte introuvable")
+        row_data = dict(row)
+        _merge_duplicate_meal_contexts(db)
+        row = db.execute("SELECT * FROM meal_contexts WHERE id=?", (context_id,)).fetchone()
+        if not row:
+            row = db.execute(
+                "SELECT * FROM meal_contexts WHERE kind=? AND lower(name)=lower(?) LIMIT 1",
+                (row_data["kind"], row_data["name"]),
+            ).fetchone()
         return _boolify_context(dict(row))
 
 

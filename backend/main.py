@@ -321,13 +321,20 @@ def put_slot(
         context = get_meal_context(context_id)
         if not context:
             raise HTTPException(status_code=404, detail="Contexte introuvable")
+        if slot_kind == "restaurant" and context.get("kind") != "restaurant":
+            raise HTTPException(status_code=422, detail="restaurant requis")
+        if slot_kind == "away" and context.get("kind") != "people":
+            raise HTTPException(status_code=422, detail="personne/foyer requis")
         source = "free"
         recipe_name = recipe_name or context["name"]
     elif slot_kind == "hosting":
         if not context_id:
             raise HTTPException(status_code=422, detail="context_id requis")
-        if not get_meal_context(context_id):
+        context = get_meal_context(context_id)
+        if not context:
             raise HTTPException(status_code=404, detail="Contexte introuvable")
+        if context.get("kind") != "people":
+            raise HTTPException(status_code=422, detail="personne/foyer requis")
     if not recipe_name:
         raise HTTPException(status_code=422, detail="recipe_name requis")
     return upsert_slot(
@@ -473,7 +480,7 @@ def api_delete_side(
 
 
 # ---------------------------------------------------------------------------
-# Contextes de repas (famille / invitations / restaurants)
+# Contextes de repas (personnes / invitations / restaurants)
 # ---------------------------------------------------------------------------
 
 @app.get("/api/meal-contexts")
@@ -492,7 +499,7 @@ def api_create_meal_context(
 ) -> dict[str, Any]:
     kind = body.get("kind", "").strip()
     name = body.get("name", "").strip()
-    if kind not in ("away", "hosting", "restaurant"):
+    if kind not in ("people", "restaurant"):
         raise HTTPException(status_code=422, detail="kind invalide")
     if not name:
         raise HTTPException(status_code=422, detail="name requis")
@@ -508,7 +515,7 @@ def api_update_meal_context(
     body: dict = Body(...),
     actor: Actor = Depends(require_permission("settings.manage")),
 ) -> dict[str, Any]:
-    if "kind" in body and body["kind"] not in ("away", "hosting", "restaurant"):
+    if "kind" in body and body["kind"] not in ("people", "restaurant"):
         raise HTTPException(status_code=422, detail="kind invalide")
     try:
         return update_meal_context(context_id, body)

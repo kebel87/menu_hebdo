@@ -143,7 +143,7 @@ interface FavoriteSide {
 
 interface MealContext {
   id: string;
-  kind: "away" | "hosting" | "restaurant";
+  kind: "people" | "restaurant";
   name: string;
   is_active: boolean;
 }
@@ -1256,7 +1256,7 @@ function MealWizard({
   const needsRecipe = slotKind === "recipe" || slotKind === "hosting";
   const needsContext = slotKind === "away" || slotKind === "hosting" || slotKind === "restaurant";
   const contextChoices = contexts.filter((c) =>
-    slotKind === "restaurant" ? c.kind === "restaurant" : c.kind === "away" || c.kind === "hosting"
+    slotKind === "restaurant" ? c.kind === "restaurant" : c.kind === "people"
   );
   const selectedContext = contexts.find((c) => c.id === contextId);
   const canConfirm = mode === "sides" || (
@@ -1313,13 +1313,13 @@ function MealWizard({
                 </span>
                 {(slotKind === "recipe"
                   ? [
-                      ["away", "Chez famille"],
+                      ["away", "Chez quelqu'un"],
                       ["hosting", "On reçoit"],
                       ["restaurant", "Restaurant"],
                     ]
                   : [
                       ["recipe", "Maison"],
-                      ["away", "Chez famille"],
+                      ["away", "Chez quelqu'un"],
                       ["hosting", "On reçoit"],
                       ["restaurant", "Restaurant"],
                     ]
@@ -1338,7 +1338,7 @@ function MealWizard({
 
             {needsContext && (
               <div className="form-row">
-                <label>{slotKind === "restaurant" ? "Restaurant" : slotKind === "hosting" ? "Famille reçue" : "Chez qui"}</label>
+                <label>{slotKind === "restaurant" ? "Restaurant" : slotKind === "hosting" ? "Qui on reçoit" : "Chez qui"}</label>
                 <select
                   value={contextId}
                   onChange={(e) => setContextId(e.target.value)}
@@ -2317,7 +2317,7 @@ function StatsScreen() {
             <div className="stats-summary-grid">
               <div className="stats-summary-item">
                 <strong>{contextStats.summary.away ?? 0}</strong>
-                <span>chez la famille</span>
+                <span>chez proches/amis</span>
               </div>
               <div className="stats-summary-item">
                 <strong>{contextStats.summary.hosting ?? 0}</strong>
@@ -2330,7 +2330,7 @@ function StatsScreen() {
             </div>
             {[
               ["away", "Chez qui on mange"],
-              ["hosting", "Famille reçue"],
+              ["hosting", "Qui on reçoit"],
               ["restaurant", "Restaurants"],
             ].map(([kind, title]) => {
               const rows = contextStats.by_kind[kind as keyof ContextStats["by_kind"]] ?? [];
@@ -2686,7 +2686,7 @@ function FamilyMembersSection() {
 function MealContextsSection() {
   const [contexts, setContexts] = useState<MealContext[]>([]);
   const [newName, setNewName] = useState("");
-  const [newKind, setNewKind] = useState<MealContext["kind"]>("away");
+  const [newKind, setNewKind] = useState<MealContext["kind"]>("people");
 
   function load() {
     api<MealContext[]>("/api/meal-contexts?include_inactive=true")
@@ -2720,8 +2720,7 @@ function MealContextsSection() {
   }
 
   const groups: [MealContext["kind"], string][] = [
-    ["away", "Famille / lieux où l'on mange"],
-    ["hosting", "Famille reçue à la maison"],
+    ["people", "Personnes ou foyers"],
     ["restaurant", "Restaurants"],
   ];
 
@@ -2730,8 +2729,7 @@ function MealContextsSection() {
       <h2>Sorties, réceptions et restaurants</h2>
       <div className="context-add-row">
         <select value={newKind} onChange={(e) => setNewKind(e.target.value as MealContext["kind"])}>
-          <option value="away">Chez famille</option>
-          <option value="hosting">On reçoit</option>
+          <option value="people">Personne/foyer</option>
           <option value="restaurant">Restaurant</option>
         </select>
         <input
