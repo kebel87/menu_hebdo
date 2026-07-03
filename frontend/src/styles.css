@@ -449,7 +449,7 @@ body {
 }
 
 /* ── Combobox (recherche + dropdown en une seule ligne) ── */
-.combo { position: relative; margin-top: 6px; }
+.combo { margin-top: 6px; }
 .combo-input-row {
   display: flex;
   align-items: center;
@@ -467,17 +467,13 @@ body {
   background: transparent;
 }
 .combo-dropdown {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  right: 0;
-  z-index: 20;
+  margin-top: 4px;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  max-height: 180px;
+  max-height: 220px;
   overflow-y: auto;
-  box-shadow: 0 4px 12px rgba(0,0,0,.12);
+  box-shadow: 0 2px 6px rgba(0,0,0,.08);
 }
 .combo-option {
   display: block;

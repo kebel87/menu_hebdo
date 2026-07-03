@@ -868,11 +868,22 @@ function SidesEditor({ sides, onChange }: { sides: SlotSide[]; onChange: (s: Slo
   const [open, setOpen] = useState(false);
   const [libSides, setLibSides] = useState<Side[]>([]);
   const [favorites, setFavorites] = useState<FavoriteSide[]>([]);
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     api<Side[]>("/api/sides").then(setLibSides).catch(() => {});
     api<FavoriteSide[]>("/api/sides/favorites").then(setFavorites).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    // Le clavier mobile réduit la zone visible : on ramène le menu dans le
+    // cadre plutôt que de laisser l'utilisateur défiler à l'aveugle.
+    const t = setTimeout(() => {
+      dropdownRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }, 150);
+    return () => clearTimeout(t);
+  }, [open]);
 
   const suggestions = input.length > 0
     ? libSides.filter((s) => s.name.toLowerCase().includes(input.toLowerCase()))
@@ -927,7 +938,7 @@ function SidesEditor({ sides, onChange }: { sides: SlotSide[]; onChange: (s: Slo
           />
         </div>
         {open && (
-          <div className="combo-dropdown">
+          <div className="combo-dropdown" ref={dropdownRef}>
             {suggestions.map((s) => (
               <button key={s.id} className="combo-option" onMouseDown={() => addSide(s.name, s.id)}>
                 {s.name}
@@ -1124,6 +1135,10 @@ function MealWizard({
               <input
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
+                onFocus={(e) => {
+                  const el = e.currentTarget;
+                  setTimeout(() => el.scrollIntoView({ block: "start", behavior: "smooth" }), 150);
+                }}
                 placeholder="Rechercher une recette…"
               />
             </div>
