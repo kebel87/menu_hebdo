@@ -538,6 +538,7 @@ body {
 .filter-chip.active { background: var(--green); border-color: var(--green); color: white; }
 
 .recipe-list { display: flex; flex-direction: column; gap: 8px; }
+.recipe-list-group { display: flex; flex-direction: column; gap: 8px; }
 
 .recipe-card {
   background: var(--panel);
