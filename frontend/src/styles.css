@@ -236,7 +236,7 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 5px 10px 4px 14px;
+  padding: 5px 10px 4px 18px;
   border-bottom: 1px solid var(--line);
   background: var(--panel);
   flex-shrink: 0;
@@ -248,7 +248,7 @@ body {
   left: 0;
   top: 0;
   bottom: 0;
-  width: 4px;
+  width: 8px;
   background: var(--day-accent);
 }
 .day-card-header .day-name {
@@ -290,7 +290,7 @@ body {
 .day-card-header.today {
   background: color-mix(in srgb, var(--day-accent) 9%, var(--panel));
 }
-.day-card-header.today::before { width: 6px; }
+.day-card-header.today::before { width: 10px; }
 .day-card-header.today .day-name,
 .day-card-header.today .day-date { color: var(--ink); }
 
