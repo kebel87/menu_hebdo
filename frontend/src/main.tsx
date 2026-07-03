@@ -1293,7 +1293,7 @@ function MealWizard({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className={`modal${step === "meal" && needsRecipe ? " meal-picker-modal" : ""}`} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", alignItems: "center", marginBottom: 12 }}>
           <span className="modal-title" style={{ flex: 1 }}>
             {mode === "sides" ? "Choisir l'accompagnement" : "Choisir un repas"} — {fmtDateFull(date)}
@@ -1390,37 +1390,6 @@ function MealWizard({
                       <ChevronDown size={18} />
                     </button>
                   </div>
-                  {mealListOpen && (
-                    loading ? (
-                      <div className="meal-dropdown-panel">
-                        <div className="empty-state"><RefreshCw size={24} className="spin" /></div>
-                      </div>
-                    ) : (
-                      <div className="meal-dropdown-panel">
-                        {mealResults.length === 0 && (
-                          <div className="empty-state"><p>Aucune recette trouvée</p></div>
-                        )}
-                        {mealResults.map((r) => {
-                          const key = r.source === "mealie" ? `mealie-${r.slug}` : `local-${r.id}`;
-                          return (
-                            <button key={key} type="button" className="meal-option" onMouseDown={() => pickMeal(r)}>
-                              <span className="meal-option-name">{r.name}</span>
-                              <span className="recipe-card-meta">
-                                {r.makes_lunch && <span className="badge badge-lunch">Lunch</span>}
-                                {r.is_weekend && <span className="badge badge-weekend">Weekend</span>}
-                                {r.prep_minutes && <span className="recipe-last">{r.prep_minutes} min</span>}
-                                {r.inventory_score?.score !== null && r.inventory_score?.score !== undefined && (
-                                  <span className={`badge ${scoreClass(r.inventory_score.score)}`}>
-                                    {Math.round(r.inventory_score.score * 100)}%
-                                  </span>
-                                )}
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )
-                  )}
                 </div>
                 <div className="filter-chips">
                   {["dispo", "rapide"].map((f) => (
@@ -1442,6 +1411,37 @@ function MealWizard({
                     </button>
                   ))}
                 </div>
+                {mealListOpen && (
+                  loading ? (
+                    <div className="meal-dropdown-panel">
+                      <div className="empty-state"><RefreshCw size={24} className="spin" /></div>
+                    </div>
+                  ) : (
+                    <div className="meal-dropdown-panel">
+                      {mealResults.length === 0 && (
+                        <div className="empty-state"><p>Aucune recette trouvée</p></div>
+                      )}
+                      {mealResults.map((r) => {
+                        const key = r.source === "mealie" ? `mealie-${r.slug}` : `local-${r.id}`;
+                        return (
+                          <button key={key} type="button" className="meal-option" onMouseDown={() => pickMeal(r)}>
+                            <span className="meal-option-name">{r.name}</span>
+                            <span className="recipe-card-meta">
+                              {r.makes_lunch && <span className="badge badge-lunch">Lunch</span>}
+                              {r.is_weekend && <span className="badge badge-weekend">Weekend</span>}
+                              {r.prep_minutes && <span className="recipe-last">{r.prep_minutes} min</span>}
+                              {r.inventory_score?.score !== null && r.inventory_score?.score !== undefined && (
+                                <span className={`badge ${scoreClass(r.inventory_score.score)}`}>
+                                  {Math.round(r.inventory_score.score * 100)}%
+                                </span>
+                              )}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )
+                )}
                 {isIdle && favorites.length > 0 && !mealListOpen && (
                   <div className="favorites-row">
                     <div className="favorites-label">Favoris</div>

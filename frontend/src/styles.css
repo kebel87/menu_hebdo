@@ -509,7 +509,6 @@ body {
   margin: 8px 0 6px;
 }
 .meal-search-combo {
-  position: relative;
   margin-bottom: 10px;
 }
 .meal-search-row {
@@ -552,7 +551,7 @@ body {
   background: var(--green-soft);
 }
 .meal-dropdown-panel {
-  margin-top: 4px;
+  margin: -4px 0 10px;
   max-height: min(320px, 48dvh);
   overflow-y: auto;
   border: 1px solid var(--line);
@@ -561,15 +560,9 @@ body {
   box-shadow: var(--shadow);
   padding: 4px;
 }
+.meal-picker-modal { min-height: min(560px, 85dvh); }
 @media (min-width: 600px) {
-  .meal-dropdown-panel {
-    position: absolute;
-    top: calc(100% + 4px);
-    left: 0;
-    right: 0;
-    z-index: 20;
-    margin-top: 0;
-  }
+  .meal-picker-modal { min-height: 430px; }
 }
 .meal-option,
 .meal-favorite-card {
