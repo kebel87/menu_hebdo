@@ -23,6 +23,8 @@ def start_notification_worker() -> None:
     global _worker_thread
     if not _VAPID_PRIVATE_KEY:
         return
+    if _worker_thread and _worker_thread.is_alive():
+        return
     _worker_thread = threading.Thread(target=_worker_loop, daemon=True)
     _worker_thread.start()
 
