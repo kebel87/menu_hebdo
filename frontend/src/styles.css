@@ -941,6 +941,10 @@ button.tag-choice {
 }
 .form-row input:focus, .form-row select:focus { outline: none; border-color: var(--green); }
 .form-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+.ingredient-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 6px; }
+.ingredient-row input, .ingredient-row select { padding: 6px 8px; font-size: 14px; }
+.ingredient-row .ingredient-name { flex: 1 1 100%; }
+.ingredient-row .ingredient-link { flex: 1 1 140px; }
 
 /* ── Buttons ── */
 .btn {

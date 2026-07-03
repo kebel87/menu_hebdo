@@ -8,6 +8,9 @@ import time
 from typing import Any
 
 from menu_app.store import list_push_subscriptions, connect
+from .access_control import load_access_control, roles_for_display_name
+
+_ROLE_RESTRICTED_ACTIONS = {"inventory.reconciliation": {"admin", "editor"}}
 
 logger = logging.getLogger(__name__)
 
@@ -57,11 +60,21 @@ def flush_notifications(force: bool = False) -> dict[str, Any]:
 
         for event_row in rows:
             actor_name = event_row["actor_name"]
+            action = event_row["dedupe_key"].split(":")[0]
             payload = json.loads(event_row["event_json"])
-            message = _build_message(event_row["dedupe_key"].split(":")[0], actor_name, payload)
+            message = _build_message(action, actor_name, payload)
             delivery: dict[str, str] = {}
 
-            for sub in subscriptions:
+            allowed_roles = _ROLE_RESTRICTED_ACTIONS.get(action)
+            recipients = subscriptions
+            if allowed_roles:
+                config = load_access_control()
+                recipients = [
+                    sub for sub in subscriptions
+                    if roles_for_display_name(sub["actor_name"], config) & allowed_roles
+                ]
+
+            for sub in recipients:
                 if sub["actor_name"] == actor_name:
                     continue
                 sub_data = json.loads(sub["subscription_json"])
@@ -109,6 +122,8 @@ def _build_message(action: str, actor_name: str, payload: dict) -> dict:
             f"{actor_name} a échangé {payload.get('recipe_a','')} ({_fmt_date(payload.get('date_a',''))})"
             f" avec {payload.get('recipe_b','')} ({_fmt_date(payload.get('date_b',''))})"
         )
+    elif action == "inventory.reconciliation":
+        body = f"Inventaire pas mis à jour pour {recipe_name} du {_fmt_date(slot_date)} — vérifier ?"
     else:
         body = f"{actor_name} a modifié le menu"
 

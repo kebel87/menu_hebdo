@@ -69,6 +69,8 @@ interface MealSlot {
     score: number | null;
     missing: string[];
     available: string[];
+    ingredients_declared?: boolean;
+    ingredients_linked?: boolean;
   };
 }
 
@@ -115,10 +117,13 @@ interface Recipe {
   prep_minutes?: number;
   notes: string;
   image?: string;
+  ingredients?: Ingredient[];
   inventory_score?: {
     score: number | null;
     missing: string[];
     available: string[];
+    ingredients_declared?: boolean;
+    ingredients_linked?: boolean;
   };
   total_count?: number;
   last_used?: string | null;
@@ -162,6 +167,43 @@ interface TagMapping {
   canonical_tag_id?: string;
   canonical_tag_name?: string;
   status: "pending" | "confirmed" | "ignored";
+}
+
+interface Ingredient {
+  name: string;
+  quantity?: number | null;
+  unit?: string;
+  canonical_ingredient_id?: string | null;
+}
+
+interface CanonicalIngredient {
+  id: string;
+  name: string;
+  created_at: string;
+}
+
+interface IngredientMapping {
+  mealie_ingredient_text: string;
+  canonical_ingredient_id?: string;
+  canonical_ingredient_name?: string;
+  status: "pending" | "confirmed" | "ignored";
+}
+
+interface IngredientInventoryLink {
+  id: string;
+  canonical_ingredient_id: string;
+  inventory_product_id: string;
+  inventory_product_name: string;
+  domain: string;
+  is_live?: boolean;
+}
+
+interface InventoryProduct {
+  product_id: string;
+  name: string;
+  domain: string;
+  unit: string;
+  quantity: number;
 }
 
 interface HistoryResult {
@@ -1890,6 +1932,8 @@ function RecipeDetailModal({
   const [tagIds, setTagIds] = useState<string[]>(recipe.tag_ids ?? []);
   const [allTags, setAllTags] = useState<CanonicalTag[]>([]);
   const [likedBy, setLikedBy] = useState<string[]>(recipe.liked_by ?? []);
+  const [ingredients, setIngredients] = useState<Ingredient[]>(recipe.ingredients ?? []);
+  const [allIngredients, setAllIngredients] = useState<CanonicalIngredient[]>([]);
   const allChildren = usePeople();
   const [saving, setSaving] = useState(false);
 
@@ -1898,6 +1942,9 @@ function RecipeDetailModal({
     api<CanonicalTag[]>("/api/tags")
       .then((t) => setAllTags([...t].filter((tag) => !tag.is_filter).sort((a, b) => a.name.localeCompare(b.name))))
       .catch(() => notify("Impossible de charger les tags."));
+    api<CanonicalIngredient[]>("/api/canonical-ingredients")
+      .then((t) => setAllIngredients([...t].sort((a, b) => a.name.localeCompare(b.name))))
+      .catch(() => notify("Impossible de charger les ingrédients canoniques."));
   }, [recipe.source]);
 
   function toggleLikedBy(childId: string) {
@@ -1906,6 +1953,18 @@ function RecipeDetailModal({
 
   function toggleTag(tagId: string) {
     setTagIds((prev) => prev.includes(tagId) ? prev.filter((id) => id !== tagId) : [...prev, tagId]);
+  }
+
+  function updateIngredient(index: number, patch: Partial<Ingredient>) {
+    setIngredients((prev) => prev.map((ing, i) => (i === index ? { ...ing, ...patch } : ing)));
+  }
+
+  function addIngredientRow() {
+    setIngredients((prev) => [...prev, { name: "" }]);
+  }
+
+  function removeIngredientRow(index: number) {
+    setIngredients((prev) => prev.filter((_, i) => i !== index));
   }
 
   async function save() {
@@ -1930,6 +1989,7 @@ function RecipeDetailModal({
             tag_ids: tagIds,
             notes,
             liked_by: likedBy,
+            ingredients: ingredients.filter((i) => i.name.trim()),
           }),
         });
         onUpdated({ ...recipe, ...updated, source: "local" });
@@ -2002,6 +2062,57 @@ function RecipeDetailModal({
                 <input type="number" value={prep} onChange={(e) => setPrep(e.target.value)} min="0" />
               </div>
             </div>
+          </section>
+        )}
+
+        {canEdit && recipe.source === "local" && (
+          <section className="recipe-detail-section">
+            <div className="section-label">Ingrédients</div>
+            {ingredients.map((ing, i) => (
+              <div key={i} className="ingredient-row">
+                <input
+                  value={ing.name}
+                  onChange={(e) => updateIngredient(i, { name: e.target.value })}
+                  placeholder="Nom de l'ingrédient"
+                  className="ingredient-name"
+                />
+                <input
+                  type="number"
+                  value={ing.quantity ?? ""}
+                  onChange={(e) => updateIngredient(i, { quantity: e.target.value ? parseFloat(e.target.value) : null })}
+                  placeholder="Qté"
+                  min="0"
+                  style={{ width: 60 }}
+                />
+                <input
+                  value={ing.unit ?? ""}
+                  onChange={(e) => updateIngredient(i, { unit: e.target.value })}
+                  placeholder="Unité"
+                  style={{ width: 70 }}
+                />
+                <select
+                  value={ing.canonical_ingredient_id ?? ""}
+                  onChange={(e) => updateIngredient(i, { canonical_ingredient_id: e.target.value || null })}
+                  className="ingredient-link"
+                >
+                  <option value="">— Lien inventaire —</option>
+                  {allIngredients.map((ci) => (
+                    <option key={ci.id} value={ci.id}>{ci.name}</option>
+                  ))}
+                </select>
+                <button className="btn-icon" onClick={() => removeIngredientRow(i)} title="Retirer">
+                  <X size={13} />
+                </button>
+              </div>
+            ))}
+            <button className="btn btn-secondary" style={{ marginTop: 6 }} onClick={addIngredientRow}>
+              <Plus size={13} /> Ajouter un ingrédient
+            </button>
+            {ingredients.length > 0 && !ingredients.some((i) => i.canonical_ingredient_id) && (
+              <div className="recipe-last" style={{ marginTop: 6 }}>
+                Reliez au moins un ingrédient (menu « — Lien inventaire — ») pour activer le calcul de disponibilité.
+              </div>
+            )}
           </section>
         )}
 
@@ -2148,6 +2259,8 @@ function LocalRecipeModal({
   const [tagIds, setTagIds] = useState<string[]>(recipe?.tag_ids ?? []);
   const [allTags, setAllTags] = useState<CanonicalTag[]>([]);
   const [likedBy, setLikedBy] = useState<string[]>(recipe?.liked_by ?? []);
+  const [ingredients, setIngredients] = useState<Ingredient[]>(recipe?.ingredients ?? []);
+  const [allIngredients, setAllIngredients] = useState<CanonicalIngredient[]>([]);
   const allChildren = usePeople();
   const [saving, setSaving] = useState(false);
 
@@ -2155,10 +2268,25 @@ function LocalRecipeModal({
     api<CanonicalTag[]>("/api/tags")
       .then((t) => setAllTags([...t].sort((a, b) => a.name.localeCompare(b.name))))
       .catch(() => notify("Impossible de charger les tags."));
+    api<CanonicalIngredient[]>("/api/canonical-ingredients")
+      .then((t) => setAllIngredients([...t].sort((a, b) => a.name.localeCompare(b.name))))
+      .catch(() => notify("Impossible de charger les ingrédients canoniques."));
   }, []);
 
   function toggleLikedBy(childId: string) {
     setLikedBy((prev) => prev.includes(childId) ? prev.filter((c) => c !== childId) : [...prev, childId]);
+  }
+
+  function updateIngredient(index: number, patch: Partial<Ingredient>) {
+    setIngredients((prev) => prev.map((ing, i) => (i === index ? { ...ing, ...patch } : ing)));
+  }
+
+  function addIngredientRow() {
+    setIngredients((prev) => [...prev, { name: "" }]);
+  }
+
+  function removeIngredientRow(index: number) {
+    setIngredients((prev) => prev.filter((_, i) => i !== index));
   }
 
   async function save() {
@@ -2173,6 +2301,7 @@ function LocalRecipeModal({
         notes,
         tag_ids: tagIds,
         liked_by: likedBy,
+        ingredients: ingredients.filter((i) => i.name.trim()),
       };
       let r: Recipe;
       if (recipe?.id) {
@@ -2251,6 +2380,49 @@ function LocalRecipeModal({
             </div>
           </div>
         )}
+        <div className="form-row">
+          <label>Ingrédients</label>
+          {ingredients.map((ing, i) => (
+            <div key={i} className="ingredient-row">
+              <input
+                value={ing.name}
+                onChange={(e) => updateIngredient(i, { name: e.target.value })}
+                placeholder="Nom de l'ingrédient"
+                style={{ flex: 2 }}
+              />
+              <input
+                type="number"
+                value={ing.quantity ?? ""}
+                onChange={(e) => updateIngredient(i, { quantity: e.target.value ? parseFloat(e.target.value) : null })}
+                placeholder="Qté"
+                min="0"
+                style={{ width: 60 }}
+              />
+              <input
+                value={ing.unit ?? ""}
+                onChange={(e) => updateIngredient(i, { unit: e.target.value })}
+                placeholder="Unité"
+                style={{ width: 70 }}
+              />
+              <select
+                value={ing.canonical_ingredient_id ?? ""}
+                onChange={(e) => updateIngredient(i, { canonical_ingredient_id: e.target.value || null })}
+                style={{ flex: 2, fontSize: 12 }}
+              >
+                <option value="">— Lien inventaire —</option>
+                {allIngredients.map((ci) => (
+                  <option key={ci.id} value={ci.id}>{ci.name}</option>
+                ))}
+              </select>
+              <button className="btn-icon" onClick={() => removeIngredientRow(i)} title="Retirer">
+                <X size={13} />
+              </button>
+            </div>
+          ))}
+          <button className="btn btn-secondary" style={{ marginTop: 6 }} onClick={addIngredientRow}>
+            <Plus size={13} /> Ajouter un ingrédient
+          </button>
+        </div>
         <div className="form-row">
           <label>Notes</label>
           <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} />
@@ -2431,14 +2603,41 @@ function StatsScreen() {
 
 // ─── SettingsScreen ───────────────────────────────────────────────────────────
 
+type SettingsTab = "general" | "inventory";
+
 function SettingsScreen({ canAdmin }: { canAdmin: boolean }) {
+  const [tab, setTab] = useState<SettingsTab>("general");
   return (
     <div className="screen-pad">
-      {canAdmin && <TagMappingsSection />}
-      {canAdmin && <CanonicalTagsSection />}
-      {canAdmin && <ChildColorsSection />}
-      {canAdmin && <FamilyMembersSection />}
-      {canAdmin && <MealContextsSection />}
+      {canAdmin && (
+        <ul className="segmented" style={{ marginBottom: 16 }}>
+          <li>
+            <button className={tab === "general" ? "active" : ""} onClick={() => setTab("general")}>
+              Général
+            </button>
+          </li>
+          <li>
+            <button className={tab === "inventory" ? "active" : ""} onClick={() => setTab("inventory")}>
+              Inventaire
+            </button>
+          </li>
+        </ul>
+      )}
+      {canAdmin && tab === "general" && (
+        <>
+          <TagMappingsSection />
+          <CanonicalTagsSection />
+          <ChildColorsSection />
+          <FamilyMembersSection />
+          <MealContextsSection />
+        </>
+      )}
+      {canAdmin && tab === "inventory" && (
+        <>
+          <IngredientMappingsSection />
+          <CanonicalIngredientsSection />
+        </>
+      )}
       <NotificationsSection />
     </div>
   );
@@ -2628,6 +2827,249 @@ function CanonicalTagsSection() {
           onKeyDown={(e) => e.key === "Enter" && addTag()}
         />
         <button onClick={addTag}><Plus size={14} /></button>
+      </div>
+    </div>
+  );
+}
+
+function IngredientMappingsSection() {
+  const [mappings, setMappings] = useState<IngredientMapping[]>([]);
+  const [ingredients, setIngredients] = useState<CanonicalIngredient[]>([]);
+  const [syncing, setSyncing] = useState(false);
+
+  useEffect(() => {
+    api<IngredientMapping[]>("/api/ingredient-mappings").then(setMappings).catch(() => notify("Impossible de charger les mappings d'ingrédients."));
+    api<CanonicalIngredient[]>("/api/canonical-ingredients").then(setIngredients).catch(() => notify("Impossible de charger les ingrédients canoniques."));
+  }, []);
+
+  async function confirm(mapping: IngredientMapping, canonicalId: string | undefined, status: string) {
+    const updated = await api<IngredientMapping>(`/api/ingredient-mappings/${encodeURIComponent(mapping.mealie_ingredient_text)}`, {
+      method: "PUT",
+      body: JSON.stringify({ canonical_ingredient_id: canonicalId, status }),
+    });
+    setMappings((prev) => prev.map((m) => (m.mealie_ingredient_text === mapping.mealie_ingredient_text ? updated : m)));
+  }
+
+  async function syncIngredients() {
+    setSyncing(true);
+    try {
+      await api("/api/ingredient-mappings/sync", { method: "POST" });
+      const updated = await api<IngredientMapping[]>("/api/ingredient-mappings");
+      setMappings(updated);
+    } catch {
+      notify("Impossible de synchroniser les ingrédients Mealie.");
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  const pending = mappings.filter((m) => m.status === "pending");
+  const rest = mappings.filter((m) => m.status !== "pending");
+
+  return (
+    <div className="settings-section">
+      <div style={{ display: "flex", alignItems: "center", marginBottom: 10 }}>
+        <h2 style={{ flex: 1, margin: 0 }}>Ingrédients Mealie → Ingrédients canoniques</h2>
+        <button className="btn btn-secondary" onClick={syncIngredients} disabled={syncing}>
+          <RefreshCw size={13} /> {syncing ? "…" : "Sync"}
+        </button>
+      </div>
+      {pending.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 12, color: "var(--amber)", fontWeight: 600, marginBottom: 6 }}>
+            {pending.length} ingrédient(s) en attente de confirmation
+          </div>
+          {pending.map((m) => (
+            <div key={m.mealie_ingredient_text} className="tag-mapping-row">
+              <span className="status-dot pending" />
+              <span className="mealie-tag">{m.mealie_ingredient_text}</span>
+              <select
+                style={{ fontSize: 12, padding: "3px 6px", border: "1px solid var(--line)", borderRadius: 4 }}
+                defaultValue={m.canonical_ingredient_id ?? ""}
+                onChange={(e) => confirm(m, e.target.value || undefined, "confirmed")}
+              >
+                <option value="">— Ignorer —</option>
+                {ingredients.map((i) => (
+                  <option key={i.id} value={i.id}>{i.name}</option>
+                ))}
+              </select>
+              <button
+                className="btn btn-ghost"
+                style={{ fontSize: 11 }}
+                onClick={() => confirm(m, undefined, "ignored")}
+              >
+                Ignorer
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {rest.length > 0 && (
+        <div>
+          {rest.map((m) => (
+            <div key={m.mealie_ingredient_text} className="tag-mapping-row">
+              <span className={`status-dot ${m.status}`} />
+              <span className="mealie-tag">{m.mealie_ingredient_text}</span>
+              <span style={{ fontSize: 12, color: "var(--muted)" }}>
+                {m.canonical_ingredient_name ?? "—"}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      {mappings.length === 0 && (
+        <div className="empty-state"><p>Aucun ingrédient Mealie importé — clique Sync pour lancer une première récolte.</p></div>
+      )}
+    </div>
+  );
+}
+
+function CanonicalIngredientsSection() {
+  const [ingredients, setIngredients] = useState<CanonicalIngredient[]>([]);
+  const [links, setLinks] = useState<IngredientInventoryLink[]>([]);
+  const [products, setProducts] = useState<InventoryProduct[]>([]);
+  const [newName, setNewName] = useState("");
+  const [linkPicker, setLinkPicker] = useState<string | null>(null);
+
+  useEffect(() => {
+    api<CanonicalIngredient[]>("/api/canonical-ingredients")
+      .then((t) => setIngredients([...t].sort((a, b) => a.name.localeCompare(b.name))))
+      .catch(() => notify("Impossible de charger les ingrédients canoniques."));
+    api<IngredientInventoryLink[]>("/api/ingredient-inventory-links")
+      .then(setLinks)
+      .catch(() => notify("Impossible de charger les liens d'inventaire."));
+    api<InventoryProduct[]>("/api/inventory-products")
+      .then(setProducts)
+      .catch(() => notify("Impossible de charger le catalogue d'inventaire."));
+  }, []);
+
+  async function addIngredient() {
+    if (!newName.trim()) return;
+    const ing = await api<CanonicalIngredient>("/api/canonical-ingredients", {
+      method: "POST",
+      body: JSON.stringify({ name: newName.trim() }),
+    });
+    setIngredients((prev) => [...prev, ing].sort((a, b) => a.name.localeCompare(b.name)));
+    setNewName("");
+  }
+
+  async function renameIngredient(id: string, name: string) {
+    if (!name.trim()) return;
+    const ing = await api<CanonicalIngredient>(`/api/canonical-ingredients/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name: name.trim() }),
+    });
+    setIngredients((prev) => prev.map((x) => (x.id === id ? ing : x)).sort((a, b) => a.name.localeCompare(b.name)));
+  }
+
+  async function deleteIngredient(id: string) {
+    await api(`/api/canonical-ingredients/${id}`, { method: "DELETE" });
+    setIngredients((prev) => prev.filter((x) => x.id !== id));
+    setLinks((prev) => prev.filter((l) => l.canonical_ingredient_id !== id));
+  }
+
+  async function addLink(canonicalIngredientId: string, product: InventoryProduct) {
+    const link = await api<IngredientInventoryLink>("/api/ingredient-inventory-links", {
+      method: "POST",
+      body: JSON.stringify({
+        canonical_ingredient_id: canonicalIngredientId,
+        inventory_product_id: product.product_id,
+        inventory_product_name: product.name,
+        domain: product.domain,
+      }),
+    });
+    setLinks((prev) => [...prev.filter((l) => l.id !== link.id), { ...link, is_live: true }]);
+    setLinkPicker(null);
+  }
+
+  async function removeLink(linkId: string) {
+    await api(`/api/ingredient-inventory-links/${linkId}`, { method: "DELETE" });
+    setLinks((prev) => prev.filter((l) => l.id !== linkId));
+  }
+
+  return (
+    <div className="settings-section">
+      <h2>Ingrédients canoniques</h2>
+      <div style={{ marginBottom: 8 }}>
+        {ingredients.map((ing) => {
+          const ingLinks = links.filter((l) => l.canonical_ingredient_id === ing.id);
+          const linkedProductIds = new Set(ingLinks.map((l) => l.inventory_product_id));
+          return (
+            <div key={ing.id} style={{ marginBottom: 10, paddingBottom: 10, borderBottom: "1px solid var(--line)" }}>
+              <div className="canonical-tag-row">
+                <input
+                  defaultValue={ing.name}
+                  key={ing.id + ing.name}
+                  onBlur={(e) => e.target.value !== ing.name && renameIngredient(ing.id, e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+                  className="tag-name-input"
+                />
+                <button
+                  className="btn-icon"
+                  onClick={() => setLinkPicker(linkPicker === ing.id ? null : ing.id)}
+                  title="Lier un item d'inventaire"
+                >
+                  <Plus size={13} />
+                </button>
+                <button className="btn-icon" onClick={() => deleteIngredient(ing.id)} title="Supprimer">
+                  <X size={13} />
+                </button>
+              </div>
+              {ingLinks.length > 0 && (
+                <div style={{ marginTop: 4, marginLeft: 4 }}>
+                  {ingLinks.map((l) => (
+                    <div
+                      key={l.id}
+                      style={{
+                        display: "flex", alignItems: "center", gap: 6, fontSize: 12,
+                        color: l.is_live ? "var(--muted)" : "var(--red)", padding: "2px 0",
+                      }}
+                    >
+                      <span style={{ flex: 1 }}>
+                        {l.inventory_product_name}
+                        {!l.is_live && " — introuvable dans l'inventaire actuel"}
+                      </span>
+                      <button className="btn-icon" onClick={() => removeLink(l.id)} title="Retirer le lien">
+                        <X size={11} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {linkPicker === ing.id && (
+                <div style={{ marginTop: 6 }}>
+                  <select
+                    style={{ fontSize: 12, padding: "3px 6px", border: "1px solid var(--line)", borderRadius: 4, width: "100%" }}
+                    defaultValue=""
+                    onChange={(e) => {
+                      const product = products.find((p) => p.product_id === e.target.value);
+                      if (product) addLink(ing.id, product);
+                    }}
+                  >
+                    <option value="" disabled>— Choisir un item d'inventaire —</option>
+                    {products.filter((p) => !linkedProductIds.has(p.product_id)).map((p) => (
+                      <option key={p.product_id} value={p.product_id}>
+                        {p.name} ({p.quantity} {p.unit})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {ingredients.length === 0 && (
+          <div className="empty-state"><p>Aucun ingrédient canonique</p></div>
+        )}
+      </div>
+      <div className="sides-add">
+        <input
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+          placeholder="Nouvel ingrédient…"
+          onKeyDown={(e) => e.key === "Enter" && addIngredient()}
+        />
+        <button onClick={addIngredient}><Plus size={14} /></button>
       </div>
     </div>
   );

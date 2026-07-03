@@ -54,6 +54,20 @@ def initialize_database() -> None:
         _apply_migrations(db)
 
 
+def get_meta_value(key: str) -> str | None:
+    with connect() as db:
+        row = db.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        return row["value"] if row else None
+
+
+def set_meta_value(key: str, value: str) -> None:
+    with connect() as db:
+        db.execute(
+            "INSERT INTO meta (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, value),
+        )
+
+
 def _apply_migrations(db: sqlite3.Connection) -> None:
     existing = {row[1] for row in db.execute("PRAGMA table_info(recipe_meta)").fetchall()}
     if "is_hidden" not in existing:
@@ -128,6 +142,35 @@ def _apply_migrations(db: sqlite3.Connection) -> None:
         db.execute("ALTER TABLE meal_slots ADD COLUMN slot_kind TEXT NOT NULL DEFAULT 'recipe'")
     if "context_id" not in slot_cols:
         db.execute("ALTER TABLE meal_slots ADD COLUMN context_id TEXT")
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS canonical_ingredients (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS canonical_ingredient_inventory_links (
+            id TEXT PRIMARY KEY,
+            canonical_ingredient_id TEXT NOT NULL REFERENCES canonical_ingredients(id) ON DELETE CASCADE,
+            inventory_product_id TEXT NOT NULL,
+            inventory_product_name TEXT NOT NULL DEFAULT '',
+            domain TEXT NOT NULL DEFAULT 'frozen',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_ingredient_links_canonical
+            ON canonical_ingredient_inventory_links(canonical_ingredient_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_ingredient_links_product
+            ON canonical_ingredient_inventory_links(inventory_product_id);
+
+        CREATE TABLE IF NOT EXISTS mealie_ingredient_mappings (
+            mealie_ingredient_text TEXT PRIMARY KEY,
+            canonical_ingredient_id TEXT REFERENCES canonical_ingredients(id) ON DELETE SET NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            confirmed_at TEXT NOT NULL DEFAULT '',
+            confirmed_by TEXT NOT NULL DEFAULT ''
+        );
+    """)
 
 
 def _backfill_weekend_lunch_tags(db: sqlite3.Connection) -> None:
@@ -1085,26 +1128,198 @@ def upsert_tag_mapping(
         return dict(row)
 
 
+def _import_mealie_mappings(
+    db: sqlite3.Connection,
+    mapping_table: str,
+    name_column: str,
+    canonical_table: str,
+    canonical_id_column: str,
+    values: list[str],
+) -> None:
+    """Crée les entrées 'pending' absentes du mapping pour les valeurs (noms Mealie)
+    données, avec auto-suggestion si le nom matche un concept canonique existant.
+    Généralise le pattern partagé par les tags et les ingrédients Mealie."""
+    canonical = {
+        r["name"].lower(): r["id"]
+        for r in db.execute(f"SELECT id, name FROM {canonical_table}").fetchall()
+    }
+    for value in values:
+        existing = db.execute(
+            f"SELECT status FROM {mapping_table} WHERE {name_column}=?", (value,)
+        ).fetchone()
+        if existing:
+            continue
+        suggested_id = canonical.get(value.lower().strip())
+        db.execute(
+            f"""INSERT OR IGNORE INTO {mapping_table}
+                ({name_column}, {canonical_id_column}, status, confirmed_at, confirmed_by)
+                VALUES (?,?,?,?,?)""",
+            (value, suggested_id, "pending", "", ""),
+        )
+
+
 def import_mealie_tags(mealie_tags: list[str]) -> None:
     """Importe les tags Mealie. Crée les entrées pending absentes, auto-suggère si nom ≈ canonique."""
     with connect() as db:
-        canonical = {
-            r["name"].lower(): r["id"]
-            for r in db.execute("SELECT id, name FROM canonical_tags").fetchall()
-        }
-        for tag in mealie_tags:
-            existing = db.execute(
-                "SELECT status FROM mealie_tag_mappings WHERE mealie_tag_name=?", (tag,)
-            ).fetchone()
-            if existing:
-                continue
-            suggested_id = canonical.get(tag.lower().strip())
-            db.execute(
-                """INSERT OR IGNORE INTO mealie_tag_mappings
-                   (mealie_tag_name, canonical_tag_id, status, confirmed_at, confirmed_by)
-                   VALUES (?,?,?,?,?)""",
-                (tag, suggested_id, "pending", "", ""),
-            )
+        _import_mealie_mappings(
+            db, "mealie_tag_mappings", "mealie_tag_name",
+            "canonical_tags", "canonical_tag_id", mealie_tags,
+        )
+
+
+# ---------------------------------------------------------------------------
+# canonical_ingredients / mealie_ingredient_mappings / liens inventaire
+# ---------------------------------------------------------------------------
+
+def list_canonical_ingredients() -> list[dict[str, Any]]:
+    with connect() as db:
+        rows = db.execute("SELECT * FROM canonical_ingredients ORDER BY name").fetchall()
+        return [dict(r) for r in rows]
+
+
+def create_canonical_ingredient(name: str) -> dict[str, Any]:
+    with connect() as db:
+        ingredient_id = new_id()
+        now = now_iso()
+        db.execute(
+            "INSERT INTO canonical_ingredients (id, name, created_at) VALUES (?,?,?)",
+            (ingredient_id, name.strip(), now),
+        )
+        row = db.execute("SELECT * FROM canonical_ingredients WHERE id=?", (ingredient_id,)).fetchone()
+        return dict(row)
+
+
+def update_canonical_ingredient(ingredient_id: str, name: str) -> dict[str, Any]:
+    with connect() as db:
+        db.execute(
+            "UPDATE canonical_ingredients SET name=? WHERE id=?", (name.strip(), ingredient_id)
+        )
+        row = db.execute("SELECT * FROM canonical_ingredients WHERE id=?", (ingredient_id,)).fetchone()
+        if not row:
+            raise ValueError("Ingrédient introuvable")
+        return dict(row)
+
+
+def delete_canonical_ingredient(ingredient_id: str) -> None:
+    """Supprime l'ingrédient canonique et purge les références orphelines dans les
+    ingredients_json des recettes locales (pas de FK SQL possible sur du JSON)."""
+    with connect() as db:
+        db.execute("DELETE FROM canonical_ingredients WHERE id=?", (ingredient_id,))
+        for row in db.execute("SELECT id, ingredients_json FROM local_recipes").fetchall():
+            ingredients = json.loads(row["ingredients_json"] or "[]")
+            changed = False
+            for ing in ingredients:
+                if ing.get("canonical_ingredient_id") == ingredient_id:
+                    ing["canonical_ingredient_id"] = None
+                    changed = True
+            if changed:
+                db.execute(
+                    "UPDATE local_recipes SET ingredients_json=? WHERE id=?",
+                    (json.dumps(ingredients), row["id"]),
+                )
+
+
+def list_ingredient_inventory_links(canonical_ingredient_id: str | None = None) -> list[dict[str, Any]]:
+    with connect() as db:
+        if canonical_ingredient_id:
+            rows = db.execute(
+                "SELECT * FROM canonical_ingredient_inventory_links WHERE canonical_ingredient_id=? ORDER BY inventory_product_name",
+                (canonical_ingredient_id,),
+            ).fetchall()
+        else:
+            rows = db.execute(
+                "SELECT * FROM canonical_ingredient_inventory_links ORDER BY inventory_product_name"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def create_ingredient_inventory_link(
+    canonical_ingredient_id: str,
+    inventory_product_id: str,
+    inventory_product_name: str,
+    domain: str,
+) -> dict[str, Any]:
+    with connect() as db:
+        link_id = new_id()
+        now = now_iso()
+        db.execute(
+            """INSERT INTO canonical_ingredient_inventory_links
+               (id, canonical_ingredient_id, inventory_product_id, inventory_product_name, domain, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?)
+               ON CONFLICT(inventory_product_id) DO UPDATE SET
+               canonical_ingredient_id=excluded.canonical_ingredient_id,
+               inventory_product_name=excluded.inventory_product_name,
+               domain=excluded.domain,
+               updated_at=excluded.updated_at""",
+            (link_id, canonical_ingredient_id, inventory_product_id, inventory_product_name, domain, now, now),
+        )
+        row = db.execute(
+            "SELECT * FROM canonical_ingredient_inventory_links WHERE inventory_product_id=?",
+            (inventory_product_id,),
+        ).fetchone()
+        return dict(row)
+
+
+def delete_ingredient_inventory_link(link_id: str) -> None:
+    with connect() as db:
+        db.execute("DELETE FROM canonical_ingredient_inventory_links WHERE id=?", (link_id,))
+
+
+def list_mealie_ingredient_mappings(status: str | None = None) -> list[dict[str, Any]]:
+    with connect() as db:
+        if status:
+            rows = db.execute(
+                """SELECT m.*, c.name as canonical_ingredient_name
+                   FROM mealie_ingredient_mappings m
+                   LEFT JOIN canonical_ingredients c ON c.id = m.canonical_ingredient_id
+                   WHERE m.status = ? ORDER BY m.mealie_ingredient_text""",
+                (status,),
+            ).fetchall()
+        else:
+            rows = db.execute(
+                """SELECT m.*, c.name as canonical_ingredient_name
+                   FROM mealie_ingredient_mappings m
+                   LEFT JOIN canonical_ingredients c ON c.id = m.canonical_ingredient_id
+                   ORDER BY m.mealie_ingredient_text""",
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def upsert_ingredient_mapping(
+    mealie_ingredient_text: str,
+    canonical_ingredient_id: str | None,
+    status: str,
+    confirmed_by: str = "",
+) -> dict[str, Any]:
+    with connect() as db:
+        now = now_iso()
+        db.execute(
+            """INSERT INTO mealie_ingredient_mappings
+               (mealie_ingredient_text, canonical_ingredient_id, status, confirmed_at, confirmed_by)
+               VALUES (?,?,?,?,?)
+               ON CONFLICT(mealie_ingredient_text) DO UPDATE SET
+               canonical_ingredient_id=excluded.canonical_ingredient_id,
+               status=excluded.status,
+               confirmed_at=excluded.confirmed_at,
+               confirmed_by=excluded.confirmed_by""",
+            (mealie_ingredient_text, canonical_ingredient_id, status,
+             now if status == "confirmed" else "", confirmed_by),
+        )
+        row = db.execute(
+            "SELECT * FROM mealie_ingredient_mappings WHERE mealie_ingredient_text=?",
+            (mealie_ingredient_text,),
+        ).fetchone()
+        return dict(row)
+
+
+def import_mealie_ingredients(mealie_ingredient_texts: list[str]) -> None:
+    """Importe les textes d'ingrédients Mealie. Crée les entrées pending absentes,
+    auto-suggère si le texte ≈ ingrédient canonique existant."""
+    with connect() as db:
+        _import_mealie_mappings(
+            db, "mealie_ingredient_mappings", "mealie_ingredient_text",
+            "canonical_ingredients", "canonical_ingredient_id", mealie_ingredient_texts,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1263,3 +1478,10 @@ def _record_notification_event(
     except sqlite3.IntegrityError:
         # déjà en attente pour cette clé, on ignore
         pass
+
+
+def enqueue_notification(actor_name: str, action: str, payload: dict[str, Any]) -> None:
+    """Point d'entrée public pour enqueue un événement de notification hors du
+    contexte d'une mutation de slot (ex. job de réconciliation d'inventaire)."""
+    with connect() as db:
+        _record_notification_event(db, actor_name, action, payload)

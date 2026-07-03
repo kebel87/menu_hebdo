@@ -27,6 +27,20 @@ def resolve_roles(subject: str, email: str, groups: List[str], config: dict) -> 
     return roles
 
 
+def roles_for_display_name(display_name: str, config: dict) -> Set[str]:
+    """Variante de resolve_roles qui matche sur le nom d'affichage plutôt que
+    sujet/email — utile pour cibler les abonnés push par rôle, puisque
+    push_subscriptions ne stocke que actor_name (= Actor.name =
+    resolve_display_name(...)). Résolu à la volée (config non caché) pour
+    qu'un changement de rôle soit reflété immédiatement, sans attendre un
+    nouvel abonnement push."""
+    roles: Set[str] = set(config.get("defaults", {}).get("roles", []))
+    for user in config.get("users", []):
+        if user.get("display_name") == display_name:
+            roles.update(user.get("roles", []))
+    return roles
+
+
 def resolve_display_name(subject: str, email: str, fallback: str, config: dict) -> str:
     for user in config.get("users", []):
         if user.get("subject") == subject or (

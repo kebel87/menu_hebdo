@@ -13,8 +13,10 @@ _MEALIE_URL = os.getenv("MEALIE_URL", "https://mealie.kb87.net")
 _MEALIE_API_KEY = os.getenv("MEALIE_API_KEY", "")
 _CACHE_TTL = 3600  # 1 heure
 
-_recipe_cache: dict[str, Any] = {}
-_recipe_cache_at: float = 0.0
+_recipe_list_cache: dict[str, Any] = {}
+_recipe_list_cache_at: float = 0.0
+_recipe_detail_cache: dict[str, Any] = {}
+_recipe_detail_cache_at: float = 0.0
 _tag_cache: list[str] = []
 _tag_cache_at: float = 0.0
 
@@ -31,23 +33,30 @@ def _get(path: str) -> Any:
 
 
 def get_recipes(force: bool = False) -> list[dict[str, Any]]:
-    global _recipe_cache, _recipe_cache_at
-    if not force and _recipe_cache and (time.time() - _recipe_cache_at) < _CACHE_TTL:
-        return list(_recipe_cache.values())
+    """Vue LISTE (résumé, sans recipeIngredient) — voir get_recipe() pour le détail complet."""
+    global _recipe_list_cache, _recipe_list_cache_at
+    if not force and _recipe_list_cache and (time.time() - _recipe_list_cache_at) < _CACHE_TTL:
+        return list(_recipe_list_cache.values())
     data = _get("/recipes?perPage=1000")
     items = data.get("items", data) if isinstance(data, dict) else data
-    _recipe_cache = {r["slug"]: r for r in items if "slug" in r}
-    _recipe_cache_at = time.time()
+    _recipe_list_cache = {r["slug"]: r for r in items if "slug" in r}
+    _recipe_list_cache_at = time.time()
     _refresh_tag_cache(items)
-    return list(_recipe_cache.values())
+    return list(_recipe_list_cache.values())
 
 
 def get_recipe(slug: str) -> dict[str, Any] | None:
-    if slug in _recipe_cache:
-        return _recipe_cache[slug]
+    """Vue DÉTAIL (inclut recipeIngredient) — cache séparé de get_recipes() car
+    l'endpoint liste de Mealie ne renvoie pas les ingrédients."""
+    global _recipe_detail_cache, _recipe_detail_cache_at
+    if (time.time() - _recipe_detail_cache_at) >= _CACHE_TTL:
+        _recipe_detail_cache = {}
+        _recipe_detail_cache_at = time.time()
+    if slug in _recipe_detail_cache:
+        return _recipe_detail_cache[slug]
     try:
         recipe = _get(f"/recipes/{slug}")
-        _recipe_cache[slug] = recipe
+        _recipe_detail_cache[slug] = recipe
         return recipe
     except httpx.HTTPStatusError:
         return None

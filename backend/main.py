@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
+import time
 from datetime import date, timedelta
 from typing import Any
 
@@ -15,28 +17,38 @@ logger = logging.getLogger(__name__)
 
 from menu_app.store import (
     clear_slot,
+    create_canonical_ingredient,
     create_canonical_tag,
     create_family_member,
+    create_ingredient_inventory_link,
     create_local_recipe,
     create_meal_context,
     create_side,
+    delete_canonical_ingredient,
     delete_canonical_tag,
     delete_family_member,
+    delete_ingredient_inventory_link,
     delete_local_recipe,
     delete_meal_context,
     delete_push_subscription,
     delete_side,
+    enqueue_notification,
     get_local_recipe,
+    get_meta_value,
     get_meal_context,
     get_or_create_plan,
     get_recipe_meta,
     get_slot,
+    import_mealie_ingredients,
     import_mealie_tags,
+    list_canonical_ingredients,
     list_canonical_tags,
     list_child_colors,
     list_family_members,
+    list_ingredient_inventory_links,
     list_local_recipes,
     list_meal_contexts,
+    list_mealie_ingredient_mappings,
     list_plans,
     list_sides,
     list_slots_for_plan,
@@ -47,7 +59,9 @@ from menu_app.store import (
     recipe_frequency,
     recipe_usage_stats,
     set_child_color,
+    set_meta_value,
     side_frequency,
+    update_canonical_ingredient,
     update_family_member,
     update_meal_context,
     side_usage_stats,
@@ -58,6 +72,7 @@ from menu_app.store import (
     swap_slots,
     update_local_recipe,
     update_side,
+    upsert_ingredient_mapping,
     upsert_recipe_meta,
     upsert_slot,
     upsert_tag_mapping,
@@ -66,7 +81,7 @@ from menu_app.store import (
 from .access_control import ACCESS_CONTROL_PATH
 from .auth import Actor, current_actor, require_permission
 from .mealie_client import get_recipes, get_recipe, get_mealie_tags, is_configured as mealie_ok
-from .inventory_client import get_inventory, inventory_score, is_configured as inv_ok
+from .inventory_client import get_inventory_products, get_item_history, score_ingredients, is_configured as inv_ok
 from . import calendar_client
 from .notifications import (
     flush_notifications,
@@ -98,6 +113,7 @@ def startup() -> None:
     initialize_database()
     start_notification_worker()
     _sync_mealie_tags()
+    _start_reconciliation_worker()
 
 
 def _sync_mealie_tags() -> None:
@@ -588,14 +604,133 @@ def api_delete_local_recipe(
 # Mealie proxy + recettes unifiées
 # ---------------------------------------------------------------------------
 
+def _canonical_availability() -> dict[str, float]:
+    """Quantité disponible par ingrédient canonique, agrégée à travers tous les
+    produits d'inventaire liés (résolution par product_id, pas par nom)."""
+    links = list_ingredient_inventory_links()
+    quantities = {p["product_id"]: p["quantity"] for p in get_inventory_products()}
+    availability: dict[str, float] = {}
+    for link in links:
+        qty = quantities.get(link["inventory_product_id"], 0.0)
+        cid = link["canonical_ingredient_id"]
+        availability[cid] = availability.get(cid, 0.0) + qty
+    return availability
+
+
+def _mealie_ingredient_entries(
+    detail: dict[str, Any] | None, mapping_by_text: dict[str, str]
+) -> list[dict[str, Any]]:
+    if not detail:
+        return []
+    entries: list[dict[str, Any]] = []
+    for ing in detail.get("recipeIngredient", []):
+        text = _mealie_ingredient_text(ing)
+        if not text:
+            continue
+        entries.append({"name": text, "canonical_ingredient_id": mapping_by_text.get(text)})
+    return entries
+
+
+_RECONCILIATION_META_KEY = "last_inventory_reconciliation_date"
+_reconciliation_thread: threading.Thread | None = None
+
+
+def _resolve_slot_ingredient_entries(slot: dict[str, Any]) -> list[dict[str, Any]]:
+    """Entrées {name, canonical_ingredient_id} pour un slot recette (locale ou
+    Mealie), tous ingrédients confondus (liés ou non)."""
+    if slot.get("recipe_source") == "local" and slot.get("local_recipe_id"):
+        recipe = get_local_recipe(slot["local_recipe_id"])
+        return recipe.get("ingredients", []) if recipe else []
+    if slot.get("recipe_source") == "mealie" and slot.get("mealie_slug"):
+        mapping = {
+            m["mealie_ingredient_text"]: m["canonical_ingredient_id"]
+            for m in list_mealie_ingredient_mappings(status="confirmed")
+            if m.get("canonical_ingredient_id")
+        }
+        return _mealie_ingredient_entries(get_recipe(slot["mealie_slug"]), mapping)
+    return []
+
+
+def _check_inventory_reconciliation() -> None:
+    """Vérifie que les ingrédients liés des repas d'hier ont bien été débités de
+    l'inventaire (via l'historique en lecture seule d'inventaire_familial) ;
+    sinon notifie les admin/editor (un seul événement par slot). Skip
+    silencieux si rien n'est suivi — jamais de notification pour une recette
+    non liée, conforme à l'exigence "pas de malus si non suivi"."""
+    if not inv_ok():
+        return
+    yesterday_iso = (date.today() - timedelta(days=1)).isoformat()
+    slots = [
+        s for s in list_slots_for_range(yesterday_iso, yesterday_iso)
+        if s.get("slot_kind") == "recipe"
+    ]
+    if not slots:
+        return
+    links_by_canonical: dict[str, list[dict[str, Any]]] = {}
+    for link in list_ingredient_inventory_links():
+        links_by_canonical.setdefault(link["canonical_ingredient_id"], []).append(link)
+    live_products = {p["product_id"]: p for p in get_inventory_products()}
+
+    for slot in slots:
+        entries = _resolve_slot_ingredient_entries(slot)
+        linked_ids = {e["canonical_ingredient_id"] for e in entries if e.get("canonical_ingredient_id")}
+        if not linked_ids:
+            continue
+        debited = False
+        for cid in linked_ids:
+            for link in links_by_canonical.get(cid, []):
+                product = live_products.get(link["inventory_product_id"])
+                name = product["name"] if product else link["inventory_product_name"]
+                domain = product["domain"] if product else link["domain"]
+                history = get_item_history(name, domain)
+                if any(
+                    ev.get("action") == "item.consume" and str(ev.get("created_at", "")) >= yesterday_iso
+                    for ev in history.get("events", [])
+                ):
+                    debited = True
+                    break
+            if debited:
+                break
+        if not debited:
+            enqueue_notification("Système", "inventory.reconciliation", {
+                "slot_date": slot["slot_date"],
+                "recipe_name": slot["recipe_name"],
+            })
+
+
+def _run_inventory_reconciliation_if_due() -> None:
+    today_iso = date.today().isoformat()
+    if get_meta_value(_RECONCILIATION_META_KEY) == today_iso:
+        return
+    set_meta_value(_RECONCILIATION_META_KEY, today_iso)
+    _check_inventory_reconciliation()
+
+
+def _reconciliation_loop() -> None:
+    while True:
+        try:
+            _run_inventory_reconciliation_if_due()
+        except Exception:
+            logger.warning("Échec de la réconciliation d'inventaire", exc_info=True)
+        time.sleep(3600)
+
+
+def _start_reconciliation_worker() -> None:
+    global _reconciliation_thread
+    if _reconciliation_thread and _reconciliation_thread.is_alive():
+        return
+    _reconciliation_thread = threading.Thread(target=_reconciliation_loop, daemon=True)
+    _reconciliation_thread.start()
+
+
 def _build_recipe_list(include_hidden: bool) -> list[dict[str, Any]]:
-    inventory = get_inventory()
+    availability = _canonical_availability()
     local = list_local_recipes()
     usage = recipe_usage_stats()
     results: list[dict[str, Any]] = []
 
     for r in local:
-        score_data = inventory_score(r.get("ingredients", []), inventory)
+        score_data = score_ingredients(r.get("ingredients", []), availability)
         stats = usage.get(r["name"], {})
         results.append({
             "source": "local",
@@ -609,6 +744,7 @@ def _build_recipe_list(include_hidden: bool) -> list[dict[str, Any]]:
             "is_hidden": False,
             "prep_minutes": r.get("prep_minutes"),
             "notes": r.get("notes", ""),
+            "ingredients": r.get("ingredients", []),
             "inventory_score": score_data,
             "total_count": stats.get("count", 0),
             "last_used": stats.get("last_date"),
@@ -618,6 +754,11 @@ def _build_recipe_list(include_hidden: bool) -> list[dict[str, Any]]:
         try:
             mealie_recipes = get_recipes()
             tag_ctx = _mealie_tag_mapping_context()
+            ingredient_mapping = {
+                m["mealie_ingredient_text"]: m["canonical_ingredient_id"]
+                for m in list_mealie_ingredient_mappings(status="confirmed")
+                if m.get("canonical_ingredient_id")
+            }
             for r in mealie_recipes:
                 slug = r.get("slug", "")
                 meta = get_recipe_meta(slug)
@@ -626,8 +767,8 @@ def _build_recipe_list(include_hidden: bool) -> list[dict[str, Any]]:
                 tags = (
                     _canonical_tags_for_mealie_recipe(r, *tag_ctx) if tag_ctx else []
                 )
-                ingredients = r.get("recipeIngredient", [])
-                score_data = inventory_score(ingredients, inventory)
+                entries = _mealie_ingredient_entries(get_recipe(slug), ingredient_mapping)
+                score_data = score_ingredients(entries, availability)
                 name = r.get("name", slug)
                 stats = usage.get(name, {})
                 results.append({
@@ -680,22 +821,35 @@ def _recipe_key(r: dict[str, Any]) -> tuple[str, str | None]:
     return (r["source"], r.get("slug") or r.get("id"))
 
 
+def _score_boost_key(r: dict[str, Any]) -> float:
+    """Clé de tri stable pour booster les recettes selon leur disponibilité
+    d'inventaire : plus le score est haut, plus la clé est négative (remonte
+    en premier). Une recette sans score connu (ingrédients non liés/déclarés)
+    obtient la même clé qu'une recette à 0% — jamais pire, jamais de malus
+    pour un ingrédient simplement non suivi."""
+    score = (r.get("inventory_score") or {}).get("score")
+    return -score if score is not None else 0.0
+
+
 @app.get("/api/recipes/favorites")
 def api_recipe_favorites(
     limit: int = 8,
     date: str | None = None,
     actor: Actor = Depends(require_permission("menu.read")),
 ) -> list[dict[str, Any]]:
-    """Recettes les plus fréquemment planifiées (12 dernières semaines).
+    """Recettes les plus fréquemment planifiées (12 dernières semaines), boostées
+    par disponibilité d'inventaire (recettes avec ingrédients dispo remontées,
+    sans jamais pénaliser un ingrédient simplement non suivi).
 
     Si `date` est fourni, les recettes aimées par le groupe à privilégier ce
-    jour-là (enfants présents, sinon parents) remontent en tête, sans changer
-    l'ordre relatif issu de la fréquence."""
+    jour-là (enfants présents, sinon parents) remontent en tête par-dessus ce
+    boost, sans changer l'ordre relatif issu de la fréquence/disponibilité."""
     freq = recipe_frequency(weeks=12)
     order = {f["recipe_name"]: i for i, f in enumerate(freq)}
     all_recipes = _build_recipe_list(include_hidden=False)
     favorites = [r for r in all_recipes if r["name"] in order]
     favorites.sort(key=lambda r: order[r["name"]])
+    favorites.sort(key=_score_boost_key)
 
     boost_group = _favorite_boost_group_for_date(date)
     if boost_group:
@@ -716,9 +870,13 @@ def api_mealie_recipe_detail(
     if not recipe:
         raise HTTPException(status_code=404, detail="Recette Mealie introuvable")
     meta = get_recipe_meta(slug)
-    inventory = get_inventory()
-    ingredients = recipe.get("recipeIngredient", [])
-    score_data = inventory_score(ingredients, inventory)
+    ingredient_mapping = {
+        m["mealie_ingredient_text"]: m["canonical_ingredient_id"]
+        for m in list_mealie_ingredient_mappings(status="confirmed")
+        if m.get("canonical_ingredient_id")
+    }
+    entries = _mealie_ingredient_entries(recipe, ingredient_mapping)
+    score_data = score_ingredients(entries, _canonical_availability())
     return {**recipe, "meta": meta, "inventory_score": score_data}
 
 
@@ -828,6 +986,153 @@ def api_sync_mealie_tags(
     tags = get_mealie_tags()
     import_mealie_tags(tags)
     return {"imported": len(tags)}
+
+
+# ---------------------------------------------------------------------------
+# Ingrédients canoniques / liens inventaire / mappings Mealie
+# ---------------------------------------------------------------------------
+
+def _mealie_ingredient_text(ingredient: dict[str, Any]) -> str:
+    """Meilleur identifiant texte pour un ingrédient Mealie : le nom structuré de
+    l'aliment (food.name) si disponible, sinon le texte libre affiché."""
+    food = ingredient.get("food")
+    if isinstance(food, dict) and food.get("name"):
+        return str(food["name"]).strip()
+    for key in ("display", "note", "originalText"):
+        val = ingredient.get(key)
+        if val:
+            return str(val).strip()
+    return ""
+
+
+@app.get("/api/canonical-ingredients")
+def api_list_canonical_ingredients(
+    actor: Actor = Depends(require_permission("menu.read")),
+) -> list[dict]:
+    return list_canonical_ingredients()
+
+
+@app.post("/api/canonical-ingredients")
+def api_create_canonical_ingredient(
+    body: dict = Body(...),
+    actor: Actor = Depends(require_permission("settings.manage")),
+) -> dict:
+    name = body.get("name", "").strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="name requis")
+    return create_canonical_ingredient(name)
+
+
+@app.patch("/api/canonical-ingredients/{ingredient_id}")
+def api_update_canonical_ingredient(
+    ingredient_id: str,
+    body: dict = Body(...),
+    actor: Actor = Depends(require_permission("settings.manage")),
+) -> dict:
+    name = body.get("name", "").strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="name requis")
+    try:
+        return update_canonical_ingredient(ingredient_id, name)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.delete("/api/canonical-ingredients/{ingredient_id}")
+def api_delete_canonical_ingredient(
+    ingredient_id: str,
+    actor: Actor = Depends(require_permission("settings.manage")),
+) -> dict:
+    delete_canonical_ingredient(ingredient_id)
+    return {"ok": True}
+
+
+@app.get("/api/ingredient-inventory-links")
+def api_list_ingredient_inventory_links(
+    canonical_ingredient_id: str | None = None,
+    actor: Actor = Depends(require_permission("menu.read")),
+) -> list[dict]:
+    links = list_ingredient_inventory_links(canonical_ingredient_id)
+    live_product_ids = {p["product_id"] for p in get_inventory_products()}
+    for link in links:
+        link["is_live"] = link["inventory_product_id"] in live_product_ids
+    return links
+
+
+@app.post("/api/ingredient-inventory-links")
+def api_create_ingredient_inventory_link(
+    body: dict = Body(...),
+    actor: Actor = Depends(require_permission("settings.manage")),
+) -> dict:
+    canonical_ingredient_id = body.get("canonical_ingredient_id", "")
+    inventory_product_id = body.get("inventory_product_id", "")
+    if not canonical_ingredient_id or not inventory_product_id:
+        raise HTTPException(status_code=422, detail="canonical_ingredient_id et inventory_product_id requis")
+    return create_ingredient_inventory_link(
+        canonical_ingredient_id,
+        inventory_product_id,
+        body.get("inventory_product_name", ""),
+        body.get("domain", "frozen"),
+    )
+
+
+@app.delete("/api/ingredient-inventory-links/{link_id}")
+def api_delete_ingredient_inventory_link(
+    link_id: str,
+    actor: Actor = Depends(require_permission("settings.manage")),
+) -> dict:
+    delete_ingredient_inventory_link(link_id)
+    return {"ok": True}
+
+
+@app.get("/api/inventory-products")
+def api_list_inventory_products(
+    actor: Actor = Depends(require_permission("settings.manage")),
+) -> list[dict]:
+    """Catalogue des produits d'inventaire distincts, pour la recherche lors du
+    lien avec un ingrédient canonique."""
+    return get_inventory_products()
+
+
+@app.get("/api/ingredient-mappings")
+def api_list_ingredient_mappings(
+    status: str | None = None,
+    actor: Actor = Depends(require_permission("menu.read")),
+) -> list[dict]:
+    return list_mealie_ingredient_mappings(status)
+
+
+@app.put("/api/ingredient-mappings/{mealie_ingredient_text}")
+def api_confirm_ingredient_mapping(
+    mealie_ingredient_text: str,
+    body: dict = Body(...),
+    actor: Actor = Depends(require_permission("settings.manage")),
+) -> dict:
+    return upsert_ingredient_mapping(
+        mealie_ingredient_text,
+        canonical_ingredient_id=body.get("canonical_ingredient_id"),
+        status=body.get("status", "confirmed"),
+        confirmed_by=actor.name,
+    )
+
+
+@app.post("/api/ingredient-mappings/sync")
+def api_sync_mealie_ingredients(
+    actor: Actor = Depends(require_permission("settings.manage")),
+) -> dict:
+    if not mealie_ok():
+        return {"imported": 0}
+    texts: set[str] = set()
+    for r in get_recipes():
+        detail = get_recipe(r.get("slug", ""))
+        if not detail:
+            continue
+        for ing in detail.get("recipeIngredient", []):
+            text = _mealie_ingredient_text(ing)
+            if text:
+                texts.add(text)
+    import_mealie_ingredients(sorted(texts))
+    return {"imported": len(texts)}
 
 
 # ---------------------------------------------------------------------------
