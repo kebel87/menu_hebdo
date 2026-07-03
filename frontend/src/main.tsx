@@ -1037,6 +1037,7 @@ function MealWizard({
   const [q, setQ] = useState("");
   const [filters, setFilters] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
+  const [mealListOpen, setMealListOpen] = useState(false);
   const filterTags = useFilterableTags();
 
   useEffect(() => {
@@ -1049,6 +1050,7 @@ function MealWizard({
   }, [mode, date]);
 
   function toggleFilter(f: string) {
+    setMealListOpen(true);
     setFilters((prev) => {
       const n = new Set(prev);
       n.has(f) ? n.delete(f) : n.add(f);
@@ -1081,6 +1083,7 @@ function MealWizard({
     : [{ label: null, items: filtered }];
 
   function pickMeal(r: Recipe) {
+    setMealListOpen(false);
     setChosenRecipe(r);
     if (mode === "meal") {
       // Le repas seul change : on garde l'accompagnement existant, étape sides sautée.
@@ -1123,7 +1126,9 @@ function MealWizard({
               <Search size={16} style={{ alignSelf: "center", color: "var(--muted)" }} />
               <input
                 value={q}
-                onChange={(e) => setQ(e.target.value)}
+                onChange={(e) => { setQ(e.target.value); setMealListOpen(true); }}
+                onFocus={() => setMealListOpen(true)}
+                onBlur={() => setTimeout(() => setMealListOpen(false), 150)}
                 placeholder="Rechercher une recette…"
               />
             </div>
@@ -1147,43 +1152,45 @@ function MealWizard({
                 </button>
               ))}
             </div>
-            {loading ? (
-              <div className="empty-state"><RefreshCw size={24} className="spin" /></div>
-            ) : (
-              <div className="recipe-list">
-                {mealSections.every((s) => s.items.length === 0) && (
-                  <div className="empty-state"><p>Aucune recette trouvée</p></div>
-                )}
-                {mealSections.map((section, si) => (
-                  section.items.length === 0 ? null : (
-                    <div key={section.label ?? si} className="recipe-list-group">
-                      {section.label && <div className="favorites-label">{section.label}</div>}
-                      {section.items.map((r) => {
-                        const key = r.source === "mealie" ? `mealie-${r.slug}` : `local-${r.id}`;
-                        return (
-                          <div key={key} className="recipe-card" onClick={() => pickMeal(r)}>
-                            <div className="recipe-card-header">
-                              <span className="recipe-card-name">{r.name}</span>
+            {mealListOpen && (
+              loading ? (
+                <div className="empty-state"><RefreshCw size={24} className="spin" /></div>
+              ) : (
+                <div className="recipe-list">
+                  {mealSections.every((s) => s.items.length === 0) && (
+                    <div className="empty-state"><p>Aucune recette trouvée</p></div>
+                  )}
+                  {mealSections.map((section, si) => (
+                    section.items.length === 0 ? null : (
+                      <div key={section.label ?? si} className="recipe-list-group">
+                        {section.label && <div className="favorites-label">{section.label}</div>}
+                        {section.items.map((r) => {
+                          const key = r.source === "mealie" ? `mealie-${r.slug}` : `local-${r.id}`;
+                          return (
+                            <div key={key} className="recipe-card" onClick={() => pickMeal(r)}>
+                              <div className="recipe-card-header">
+                                <span className="recipe-card-name">{r.name}</span>
+                              </div>
+                              <div className="recipe-card-meta">
+                                {r.makes_lunch && <span className="badge badge-lunch">Lunch</span>}
+                                {r.is_weekend && <span className="badge badge-weekend">Weekend</span>}
+                                {r.prep_minutes && (
+                                  <span className="recipe-last">{r.prep_minutes} min</span>
+                                )}
+                                {r.inventory_score?.score !== null && r.inventory_score?.score !== undefined && (
+                                  <span className={`badge ${scoreClass(r.inventory_score.score)}`}>
+                                    {Math.round(r.inventory_score.score * 100)}%
+                                  </span>
+                                )}
+                              </div>
                             </div>
-                            <div className="recipe-card-meta">
-                              {r.makes_lunch && <span className="badge badge-lunch">Lunch</span>}
-                              {r.is_weekend && <span className="badge badge-weekend">Weekend</span>}
-                              {r.prep_minutes && (
-                                <span className="recipe-last">{r.prep_minutes} min</span>
-                              )}
-                              {r.inventory_score?.score !== null && r.inventory_score?.score !== undefined && (
-                                <span className={`badge ${scoreClass(r.inventory_score.score)}`}>
-                                  {Math.round(r.inventory_score.score * 100)}%
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )
-                ))}
-              </div>
+                          );
+                        })}
+                      </div>
+                    )
+                  ))}
+                </div>
+              )
             )}
           </>
         )}
