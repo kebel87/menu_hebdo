@@ -53,6 +53,9 @@ interface MealSlot {
   id: string;
   plan_id: string;
   slot_date: string;
+  slot_kind: "recipe" | "away" | "hosting" | "restaurant";
+  context_id?: string;
+  context?: MealContext;
   recipe_source: "mealie" | "local" | "free";
   mealie_slug?: string;
   local_recipe_id?: string;
@@ -138,6 +141,18 @@ interface FavoriteSide {
   side_id?: string;
 }
 
+interface MealContext {
+  id: string;
+  kind: "away" | "hosting" | "restaurant";
+  name: string;
+  cuisine: string;
+  address: string;
+  phone: string;
+  website: string;
+  notes: string;
+  is_active: boolean;
+}
+
 interface CanonicalTag {
   id: string;
   name: string;
@@ -165,6 +180,28 @@ interface FreqEntry {
   count: number;
   last_date: string;
 }
+
+interface ContextStatEntry {
+  kind: "away" | "hosting" | "restaurant";
+  context_id?: string;
+  name: string;
+  count: number;
+  last_date: string;
+}
+
+interface ContextStats {
+  summary: Record<"away" | "hosting" | "restaurant", number>;
+  by_kind: Record<"away" | "hosting" | "restaurant", ContextStatEntry[]>;
+}
+
+type SlotKind = MealSlot["slot_kind"];
+type WizardResult = {
+  slotKind: SlotKind;
+  contextId?: string;
+  contextName?: string;
+  recipe: Recipe | null;
+  sides: SlotSide[] | null;
+};
 
 type ViewMode = "week" | "recipes" | "sides" | "stats" | "settings";
 
@@ -294,6 +331,26 @@ function scoreLabel(score: number | null | undefined): string {
   if (score >= 0.8) return "✓";
   if (score >= 0.5) return "⚠";
   return "✗";
+}
+
+function slotKindLabel(kind?: SlotKind): string {
+  if (kind === "away") return "Ailleurs";
+  if (kind === "hosting") return "On reçoit";
+  if (kind === "restaurant") return "Resto";
+  return "Maison";
+}
+
+function slotTitle(slot: MealSlot): string {
+  if (slot.slot_kind === "away") return `Chez ${slot.context?.name ?? slot.recipe_name}`;
+  if (slot.slot_kind === "restaurant") return slot.context?.name ?? slot.recipe_name;
+  return slot.recipe_name;
+}
+
+function slotSubtitle(slot: MealSlot): string {
+  if (slot.slot_kind === "hosting") return `Reçoit ${slot.context?.name ?? "famille"}`;
+  if (slot.slot_kind === "restaurant") return slot.context?.cuisine || "Restaurant";
+  if (slot.sides.length > 0) return slot.sides.map((s) => s.name).join(", ");
+  return "";
 }
 
 // ─── Drag & Drop ──────────────────────────────────────────────────────────────
@@ -610,31 +667,42 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
     }
   }
 
-  // Persiste le choix du wizard : recipe=null -> ne touche pas au repas,
-  // sides=null -> ne touche pas aux accompagnements.
-  async function handleWizardComplete(slotDate: string, recipe: Recipe | null, sides: SlotSide[] | null) {
+  async function handleWizardComplete(slotDate: string, result: WizardResult) {
     try {
       let updated: MealSlot | null = null;
-      if (recipe) {
+      if (result.slotKind === "away" || result.slotKind === "restaurant") {
+        updated = await api<MealSlot>(`/api/week/${weekStart}/slot/${slotDate}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            slot_kind: result.slotKind,
+            context_id: result.contextId,
+            recipe_source: "free",
+            recipe_name: result.contextName,
+          }),
+        });
+        setSlots((prev) => [...prev.filter((s) => s.slot_date !== slotDate), updated!]);
+      } else if (result.recipe) {
         const body: Record<string, unknown> = {
-          recipe_source: recipe.source,
-          recipe_name: recipe.name,
-          makes_lunch: recipe.makes_lunch,
+          slot_kind: result.slotKind,
+          context_id: result.contextId,
+          recipe_source: result.recipe.source,
+          recipe_name: result.recipe.name,
+          makes_lunch: result.recipe.makes_lunch,
         };
-        if (recipe.source === "mealie") body.mealie_slug = recipe.slug;
-        if (recipe.source === "local") body.local_recipe_id = recipe.id;
+        if (result.recipe.source === "mealie") body.mealie_slug = result.recipe.slug;
+        if (result.recipe.source === "local") body.local_recipe_id = result.recipe.id;
         updated = await api<MealSlot>(`/api/week/${weekStart}/slot/${slotDate}`, {
           method: "PUT",
           body: JSON.stringify(body),
         });
         setSlots((prev) => [...prev.filter((s) => s.slot_date !== slotDate), updated!]);
       }
-      if (sides !== null) {
+      if (result.sides !== null && result.slotKind !== "away" && result.slotKind !== "restaurant") {
         const slotId = updated?.id ?? slotByDate(slotDate)?.id;
         if (slotId) {
           const savedSides = await api<SlotSide[]>(`/api/slots/${slotId}/sides`, {
             method: "PUT",
-            body: JSON.stringify(sides.map((s) => ({ side_id: s.side_id, free_text: s.free_text || s.name }))),
+            body: JSON.stringify(result.sides.map((s) => ({ side_id: s.side_id, free_text: s.free_text || s.name }))),
           });
           setSlots((prev) => prev.map((s) => (s.id === slotId ? { ...s, sides: savedSides } : s)));
         }
@@ -733,15 +801,20 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
                   <div className={`day-card-body${!slot ? " empty" : ""}`} onClick={openPicker}>
                     <div className="meal-info">
                       <span className="meal-name">
-                        {slot ? slot.recipe_name : "— "}
+                        {slot ? slotTitle(slot) : "— "}
                       </span>
-                      {slot && slot.sides.length > 0 && (
+                      {slot && slotSubtitle(slot) && (
                         <span className="meal-sides">
-                          {slot.sides.map((s) => s.name).join(", ")}
+                          {slotSubtitle(slot)}
                         </span>
                       )}
                     </div>
                     <div className="day-badges">
+                      {slot && slot.slot_kind !== "recipe" && (
+                        <span className={`badge badge-context badge-${slot.slot_kind}`}>
+                          {slotKindLabel(slot.slot_kind)}
+                        </span>
+                      )}
                       {slot?.tags?.slice(0, 2).map((t) => (
                         <span
                           key={t.id}
@@ -754,7 +827,7 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
                           {t.name}
                         </span>
                       ))}
-                      {slot?.makes_lunch && <span className="badge badge-lunch">Lunch</span>}
+                      {slot?.slot_kind !== "away" && slot?.slot_kind !== "restaurant" && slot?.makes_lunch && <span className="badge badge-lunch">Lunch</span>}
                       {slot && slot.inventory_score?.score !== undefined && (
                         <span className={`badge ${scoreClass(slot.inventory_score?.score)}`}>
                           {scoreLabel(slot.inventory_score?.score)}
@@ -776,7 +849,7 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
               style={{ opacity: 0.9, boxShadow: "0 4px 16px rgba(0,0,0,.2)" }}
             >
               <div className="day-card-body">
-                <span className="meal-name">{slotByDate(activeId)!.recipe_name}</span>
+                <span className="meal-name">{slotTitle(slotByDate(activeId)!)}</span>
               </div>
             </div>
           )}
@@ -806,7 +879,7 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
           slot={slotByDate(wizard.date)}
           mode={wizard.mode}
           canEdit={canEdit}
-          onComplete={(recipe, sides) => handleWizardComplete(wizard.date, recipe, sides)}
+          onComplete={(result) => handleWizardComplete(wizard.date, result)}
           onClose={() => setWizard(null)}
         />
       )}
@@ -860,8 +933,8 @@ function MonthGrid({
               onClick={() => onSelectDay(iso)}
             >
               <span className="day-number">{day}</span>
-              {slot && <span className="event-label">{slot.recipe_name}</span>}
-              {slot?.makes_lunch && <span className="month-lunch-dot" aria-hidden="true" title="Fait des lunchs" />}
+              {slot && <span className="event-label">{slotTitle(slot)}</span>}
+              {slot?.slot_kind !== "away" && slot?.slot_kind !== "restaurant" && slot?.makes_lunch && <span className="month-lunch-dot" aria-hidden="true" title="Fait des lunchs" />}
             </button>
           );
         })}
@@ -1054,21 +1127,25 @@ function DayActionModal({
           <button className="btn-icon" onClick={onClose}><X size={18} /></button>
         </div>
         <div style={{ marginBottom: 14 }}>
-          <div style={{ fontWeight: 700, fontSize: 15 }}>{slot.recipe_name}</div>
+          <div style={{ fontWeight: 700, fontSize: 15 }}>{slotTitle(slot)}</div>
           <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
-            {slot.sides.length > 0 ? slot.sides.map((s) => s.name).join(", ") : "Aucun accompagnement"}
+            {slotSubtitle(slot) || "Aucun accompagnement"}
           </div>
         </div>
         <div className="day-action-list">
           <button className="btn btn-secondary day-action-btn" onClick={() => onChoose("meal")}>
-            Modifier le repas
+            Modifier
           </button>
-          <button className="btn btn-secondary day-action-btn" onClick={() => onChoose("sides")}>
-            Modifier l'accompagnement
-          </button>
-          <button className="btn btn-secondary day-action-btn" onClick={() => onChoose("both")}>
-            Modifier le repas et l'accompagnement
-          </button>
+          {slot.slot_kind !== "away" && slot.slot_kind !== "restaurant" && (
+            <>
+              <button className="btn btn-secondary day-action-btn" onClick={() => onChoose("sides")}>
+                Modifier l'accompagnement
+              </button>
+              <button className="btn btn-secondary day-action-btn" onClick={() => onChoose("both")}>
+                Modifier le repas et l'accompagnement
+              </button>
+            </>
+          )}
           <button className="btn btn-danger day-action-btn" onClick={() => onChoose("reset")}>
             Remettre à zéro
           </button>
@@ -1094,16 +1171,19 @@ function MealWizard({
   slot?: MealSlot;
   mode: WizardMode;
   canEdit: boolean;
-  onComplete: (recipe: Recipe | null, sides: SlotSide[] | null) => void;
+  onComplete: (result: WizardResult) => void;
   onClose: () => void;
 }) {
   const [step, setStep] = useState<"meal" | "sides" | "confirm">(mode === "sides" ? "sides" : "meal");
+  const [slotKind, setSlotKind] = useState<SlotKind>(slot?.slot_kind ?? "recipe");
+  const [contextId, setContextId] = useState(slot?.context_id ?? "");
   const [chosenRecipe, setChosenRecipe] = useState<Recipe | null>(null);
   const [chosenSides, setChosenSides] = useState<SlotSide[]>(
     mode === "meal" || mode === "sides" ? (slot?.sides ?? []) : []
   );
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [favorites, setFavorites] = useState<Recipe[]>([]);
+  const [contexts, setContexts] = useState<MealContext[]>([]);
   const [q, setQ] = useState("");
   const [filters, setFilters] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
@@ -1117,6 +1197,9 @@ function MealWizard({
       .then(setRecipes)
       .finally(() => setLoading(false));
     api<Recipe[]>(`/api/recipes/favorites?date=${encodeURIComponent(date)}`).then(setFavorites).catch(() => notify("Impossible de charger les recettes favorites."));
+    api<MealContext[]>("/api/meal-contexts")
+      .then(setContexts)
+      .catch(() => notify("Impossible de charger les lieux et restaurants."));
   }, [mode, date]);
 
   function toggleFilter(f: string) {
@@ -1165,19 +1248,55 @@ function MealWizard({
   }
 
   function handleConfirm() {
-    const recipeToSave = mode === "sides" ? null : chosenRecipe;
-    const sidesToSave = mode === "meal" ? null : chosenSides;
-    onComplete(recipeToSave, sidesToSave);
+    const context = contexts.find((c) => c.id === contextId);
+    onComplete({
+      slotKind,
+      contextId: contextId || undefined,
+      contextName: context?.name,
+      recipe: mode === "sides" ? null : chosenRecipe,
+      sides: mode === "meal" ? null : chosenSides,
+    });
   }
+
+  const needsRecipe = slotKind === "recipe" || slotKind === "hosting";
+  const needsContext = slotKind === "away" || slotKind === "hosting" || slotKind === "restaurant";
+  const contextChoices = contexts.filter((c) =>
+    slotKind === "restaurant" ? c.kind === "restaurant" : c.kind === "away" || c.kind === "hosting"
+  );
+  const selectedContext = contexts.find((c) => c.id === contextId);
+  const canConfirm = mode === "sides" || (
+    (!needsContext || !!contextId) &&
+    (!needsRecipe || !!chosenRecipe)
+  );
 
   const steps = mode === "meal" ? ["Repas", "Confirmer"]
     : mode === "sides" ? ["Accompagnement", "Confirmer"]
-    : ["Repas", "Accompagnement", "Confirmer"];
+    : needsRecipe ? ["Repas", "Accompagnement", "Confirmer"] : ["Sortie", "Confirmer"];
   const currentIndex = step === "confirm" ? steps.length - 1
     : step === "sides" ? (mode === "sides" ? 0 : 1)
     : 0;
 
-  const confirmRecipeName = mode === "sides" ? slot?.recipe_name : chosenRecipe?.name;
+  const confirmRecipeName = mode === "sides"
+    ? slotTitle(slot!)
+    : slotKind === "away"
+      ? `Chez ${selectedContext?.name ?? ""}`
+      : slotKind === "restaurant"
+        ? selectedContext?.name
+        : chosenRecipe?.name;
+
+  function chooseSlotKind(kind: SlotKind) {
+    setSlotKind(kind);
+    setContextId("");
+    setChosenRecipe(null);
+    setChosenSides([]);
+    setMealListOpen(false);
+  }
+
+  function continueAfterContext() {
+    if (slotKind === "away" || slotKind === "restaurant") {
+      setStep("confirm");
+    }
+  }
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -1192,18 +1311,68 @@ function MealWizard({
 
         {step === "meal" && (
           <>
-            <div className="search-bar">
-              <Search size={16} style={{ alignSelf: "center", color: "var(--muted)" }} />
-              <input
-                value={q}
-                onChange={(e) => { setQ(e.target.value); setMealListOpen(true); }}
-                onFocus={() => setMealListOpen(true)}
-                onBlur={() => setTimeout(() => setMealListOpen(false), 150)}
-                placeholder="Rechercher une recette…"
-              />
-            </div>
-            <div className="filter-chips">
-              {["dispo", "rapide"].map((f) => (
+            {mode !== "meal" && (
+              <div className="meal-kind-grid">
+                {[
+                  ["recipe", "Maison"],
+                  ["away", "Chez famille"],
+                  ["hosting", "On reçoit"],
+                  ["restaurant", "Restaurant"],
+                ].map(([kind, label]) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    className={`meal-kind-btn${slotKind === kind ? " active" : ""}`}
+                    onClick={() => chooseSlotKind(kind as SlotKind)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {needsContext && (
+              <div className="form-row">
+                <label>{slotKind === "restaurant" ? "Restaurant" : slotKind === "hosting" ? "Famille reçue" : "Chez qui"}</label>
+                <select
+                  value={contextId}
+                  onChange={(e) => setContextId(e.target.value)}
+                >
+                  <option value="">Sélectionner…</option>
+                  {contextChoices.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {!needsRecipe && (
+              <>
+                <div className="form-actions">
+                  <button className="btn btn-primary" onClick={continueAfterContext} disabled={!contextId}>
+                    Continuer
+                  </button>
+                </div>
+                {contextChoices.length === 0 && (
+                  <div className="empty-state"><p>Ajoute d'abord des entrées dans les paramètres.</p></div>
+                )}
+              </>
+            )}
+
+            {needsRecipe && (
+              <>
+                <div className="search-bar">
+                  <Search size={16} style={{ alignSelf: "center", color: "var(--muted)" }} />
+                  <input
+                    value={q}
+                    onChange={(e) => { setQ(e.target.value); setMealListOpen(true); }}
+                    onFocus={() => setMealListOpen(true)}
+                    onBlur={() => setTimeout(() => setMealListOpen(false), 150)}
+                    placeholder="Rechercher une recette…"
+                  />
+                </div>
+                <div className="filter-chips">
+                  {["dispo", "rapide"].map((f) => (
                 <button
                   key={f}
                   className={`filter-chip${filters.has(f) ? " active" : ""}`}
@@ -1211,8 +1380,8 @@ function MealWizard({
                 >
                   {f === "dispo" ? "Disponible" : "< 30 min"}
                 </button>
-              ))}
-              {filterTags.map((t) => (
+                  ))}
+                  {filterTags.map((t) => (
                 <button
                   key={t.id}
                   className={`filter-chip${filters.has(t.id) ? " active" : ""}`}
@@ -1220,9 +1389,9 @@ function MealWizard({
                 >
                   {t.name}
                 </button>
-              ))}
-            </div>
-            {mealListOpen && (
+                  ))}
+                </div>
+                {mealListOpen && (
               loading ? (
                 <div className="empty-state"><RefreshCw size={24} className="spin" /></div>
               ) : (
@@ -1261,6 +1430,8 @@ function MealWizard({
                   ))}
                 </div>
               )
+                )}
+              </>
             )}
           </>
         )}
@@ -1268,7 +1439,7 @@ function MealWizard({
         {step === "sides" && (
           <>
             <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 10 }}>
-              {mode === "sides" ? slot?.recipe_name : chosenRecipe?.name}
+              {mode === "sides" ? slotTitle(slot!) : chosenRecipe?.name}
             </div>
             <SidesEditor sides={chosenSides} onChange={setChosenSides} />
             <div className="form-actions">
@@ -1289,8 +1460,15 @@ function MealWizard({
           <>
             <div style={{ marginBottom: 14 }}>
               <div style={{ fontWeight: 700, fontSize: 15 }}>{confirmRecipeName}</div>
+              {slotKind === "hosting" && selectedContext && (
+                <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
+                  Reçoit {selectedContext.name}
+                </div>
+              )}
               <div className="sides-list" style={{ marginTop: 6 }}>
-                {chosenSides.length === 0 ? (
+                {slotKind === "away" || slotKind === "restaurant" ? (
+                  <span className="side-chip">{slotKindLabel(slotKind)}</span>
+                ) : chosenSides.length === 0 ? (
                   <span style={{ fontSize: 12, color: "var(--muted)" }}>Aucun accompagnement</span>
                 ) : (
                   chosenSides.map((s) => (
@@ -1301,7 +1479,7 @@ function MealWizard({
             </div>
             <div className="form-actions" style={{ justifyContent: "space-between" }}>
               <button className="btn btn-danger btn-sm" onClick={onClose}>Annuler</button>
-              <button className="btn btn-primary" onClick={handleConfirm} disabled={!canEdit}>
+              <button className="btn btn-primary" onClick={handleConfirm} disabled={!canEdit || !canConfirm}>
                 Confirmer
               </button>
             </div>
@@ -2023,12 +2201,16 @@ function StatsScreen() {
   const [results, setResults] = useState<HistoryResult[]>([]);
   const [searching, setSearching] = useState(false);
   const [freq, setFreq] = useState<FreqEntry[]>([]);
+  const [contextStats, setContextStats] = useState<ContextStats | null>(null);
   const [freqWeeks, setFreqWeeks] = useState(12);
 
   useEffect(() => {
     api<FreqEntry[]>(`/api/stats/frequency?weeks=${freqWeeks}`)
       .then(setFreq)
       .catch(() => notify("Impossible de charger les statistiques."));
+    api<ContextStats>(`/api/stats/contexts?weeks=${freqWeeks}`)
+      .then(setContextStats)
+      .catch(() => notify("Impossible de charger les statistiques de sorties."));
   }, [freqWeeks]);
 
   async function search() {
@@ -2122,6 +2304,55 @@ function StatsScreen() {
           </table>
         )}
       </div>
+
+      <div className="settings-section">
+        <h2>Sorties et réceptions</h2>
+        {contextStats && (
+          <>
+            <div className="stats-summary-grid">
+              <div className="stats-summary-item">
+                <strong>{contextStats.summary.away ?? 0}</strong>
+                <span>chez la famille</span>
+              </div>
+              <div className="stats-summary-item">
+                <strong>{contextStats.summary.hosting ?? 0}</strong>
+                <span>réceptions</span>
+              </div>
+              <div className="stats-summary-item">
+                <strong>{contextStats.summary.restaurant ?? 0}</strong>
+                <span>restaurants</span>
+              </div>
+            </div>
+            {[
+              ["away", "Chez qui on mange"],
+              ["hosting", "Famille reçue"],
+              ["restaurant", "Restaurants"],
+            ].map(([kind, title]) => {
+              const rows = contextStats.by_kind[kind as keyof ContextStats["by_kind"]] ?? [];
+              return (
+                <div key={kind} style={{ marginTop: 14 }}>
+                  <div className="favorites-label">{title}</div>
+                  {rows.length === 0 ? (
+                    <div className="recipe-last">Pas encore de données</div>
+                  ) : (
+                    <table className="freq-table">
+                      <tbody>
+                        {rows.map((r) => (
+                          <tr key={`${r.kind}-${r.context_id ?? r.name}`}>
+                            <td>{r.name}</td>
+                            <td style={{ width: 70 }}>{r.count}×</td>
+                            <td style={{ fontSize: 12, color: "var(--muted)" }}>{weeksAgo(r.last_date)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              );
+            })}
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -2135,6 +2366,7 @@ function SettingsScreen({ canAdmin }: { canAdmin: boolean }) {
       {canAdmin && <CanonicalTagsSection />}
       {canAdmin && <ChildColorsSection />}
       {canAdmin && <FamilyMembersSection />}
+      {canAdmin && <MealContextsSection />}
       <NotificationsSection />
     </div>
   );
@@ -2442,6 +2674,133 @@ function FamilyMembersSection() {
         />
         <button onClick={addMember}><Plus size={14} /></button>
       </div>
+    </div>
+  );
+}
+
+function MealContextsSection() {
+  const [contexts, setContexts] = useState<MealContext[]>([]);
+  const [newName, setNewName] = useState("");
+  const [newKind, setNewKind] = useState<MealContext["kind"]>("away");
+
+  function load() {
+    api<MealContext[]>("/api/meal-contexts?include_inactive=true")
+      .then(setContexts)
+      .catch(() => notify("Impossible de charger les lieux et restaurants."));
+  }
+
+  useEffect(load, []);
+
+  async function addContext() {
+    if (!newName.trim()) return;
+    const c = await api<MealContext>("/api/meal-contexts", {
+      method: "POST",
+      body: JSON.stringify({ kind: newKind, name: newName.trim() }),
+    });
+    setContexts((prev) => [...prev, c].sort((a, b) => a.name.localeCompare(b.name)));
+    setNewName("");
+  }
+
+  async function patchContext(id: string, payload: Partial<MealContext>) {
+    const c = await api<MealContext>(`/api/meal-contexts/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+    setContexts((prev) => prev.map((x) => (x.id === id ? c : x)).sort((a, b) => a.name.localeCompare(b.name)));
+  }
+
+  async function deleteContext(id: string) {
+    await api(`/api/meal-contexts/${id}`, { method: "DELETE" });
+    setContexts((prev) => prev.map((c) => (c.id === id ? { ...c, is_active: false } : c)));
+  }
+
+  const groups: [MealContext["kind"], string][] = [
+    ["away", "Famille / lieux où l'on mange"],
+    ["hosting", "Famille reçue à la maison"],
+    ["restaurant", "Restaurants"],
+  ];
+
+  return (
+    <div className="settings-section">
+      <h2>Sorties, réceptions et restaurants</h2>
+      <div className="context-add-row">
+        <select value={newKind} onChange={(e) => setNewKind(e.target.value as MealContext["kind"])}>
+          <option value="away">Chez famille</option>
+          <option value="hosting">On reçoit</option>
+          <option value="restaurant">Restaurant</option>
+        </select>
+        <input
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+          placeholder="Nom…"
+          onKeyDown={(e) => e.key === "Enter" && addContext()}
+        />
+        <button onClick={addContext}><Plus size={14} /></button>
+      </div>
+      {groups.map(([kind, title]) => {
+        const rows = contexts.filter((c) => c.kind === kind);
+        return (
+          <div key={kind} style={{ marginTop: 12 }}>
+            <div className="favorites-label">{title}</div>
+            <div className="context-list">
+              {rows.length === 0 && <div className="recipe-last">Aucune entrée</div>}
+              {rows.map((c) => (
+                <div key={c.id} className={`context-row${c.is_active ? "" : " inactive"}`}>
+                  <button
+                    className="btn-icon"
+                    onClick={() => patchContext(c.id, { is_active: !c.is_active })}
+                    title={c.is_active ? "Désactiver" : "Activer"}
+                  >
+                    {c.is_active ? <Eye size={15} /> : <EyeOff size={15} />}
+                  </button>
+                  <div className="context-main">
+                    <input
+                      defaultValue={c.name}
+                      key={`${c.id}-${c.name}`}
+                      className="tag-name-input"
+                      onBlur={(e) => e.target.value !== c.name && patchContext(c.id, { name: e.target.value })}
+                      onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+                    />
+                    {kind === "restaurant" && (
+                      <div className="context-extra-grid">
+                        <input
+                          defaultValue={c.cuisine}
+                          placeholder="Cuisine"
+                          onBlur={(e) => e.target.value !== c.cuisine && patchContext(c.id, { cuisine: e.target.value })}
+                        />
+                        <input
+                          defaultValue={c.website}
+                          placeholder="Site web"
+                          onBlur={(e) => e.target.value !== c.website && patchContext(c.id, { website: e.target.value })}
+                        />
+                        <input
+                          defaultValue={c.phone}
+                          placeholder="Téléphone"
+                          onBlur={(e) => e.target.value !== c.phone && patchContext(c.id, { phone: e.target.value })}
+                        />
+                        <input
+                          defaultValue={c.address}
+                          placeholder="Adresse"
+                          onBlur={(e) => e.target.value !== c.address && patchContext(c.id, { address: e.target.value })}
+                        />
+                      </div>
+                    )}
+                    <input
+                      defaultValue={c.notes}
+                      placeholder="Notes"
+                      className="context-notes"
+                      onBlur={(e) => e.target.value !== c.notes && patchContext(c.id, { notes: e.target.value })}
+                    />
+                  </div>
+                  <button className="btn-icon" onClick={() => deleteContext(c.id)} title="Désactiver">
+                    <X size={13} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }

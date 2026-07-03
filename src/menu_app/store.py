@@ -106,6 +106,27 @@ def _apply_migrations(db: sqlite3.Connection) -> None:
                 "INSERT INTO family_members (id, name, short_label, color, created_at) VALUES (?,?,?,?,?)",
                 (member_id, name, short_label, "", now),
             )
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS meal_contexts (
+            id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            name TEXT NOT NULL,
+            cuisine TEXT NOT NULL DEFAULT '',
+            address TEXT NOT NULL DEFAULT '',
+            phone TEXT NOT NULL DEFAULT '',
+            website TEXT NOT NULL DEFAULT '',
+            notes TEXT NOT NULL DEFAULT '',
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    db.execute("CREATE INDEX IF NOT EXISTS idx_meal_contexts_kind ON meal_contexts(kind, is_active, name)")
+    slot_cols = {row[1] for row in db.execute("PRAGMA table_info(meal_slots)").fetchall()}
+    if "slot_kind" not in slot_cols:
+        db.execute("ALTER TABLE meal_slots ADD COLUMN slot_kind TEXT NOT NULL DEFAULT 'recipe'")
+    if "context_id" not in slot_cols:
+        db.execute("ALTER TABLE meal_slots ADD COLUMN context_id TEXT")
 
 
 def _backfill_weekend_lunch_tags(db: sqlite3.Connection) -> None:
@@ -134,6 +155,22 @@ def _backfill_weekend_lunch_tags(db: sqlite3.Connection) -> None:
 
 
 def _create_tables(db: sqlite3.Connection) -> None:
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS meal_contexts (
+            id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            name TEXT NOT NULL,
+            cuisine TEXT NOT NULL DEFAULT '',
+            address TEXT NOT NULL DEFAULT '',
+            phone TEXT NOT NULL DEFAULT '',
+            website TEXT NOT NULL DEFAULT '',
+            notes TEXT NOT NULL DEFAULT '',
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    db.execute("CREATE INDEX IF NOT EXISTS idx_meal_contexts_kind ON meal_contexts(kind, is_active, name)")
     db.executescript("""
         CREATE TABLE IF NOT EXISTS meal_plans (
             id TEXT PRIMARY KEY,
@@ -146,6 +183,8 @@ def _create_tables(db: sqlite3.Connection) -> None:
             id TEXT PRIMARY KEY,
             plan_id TEXT NOT NULL REFERENCES meal_plans(id) ON DELETE CASCADE,
             slot_date TEXT NOT NULL,
+            slot_kind TEXT NOT NULL DEFAULT 'recipe',
+            context_id TEXT REFERENCES meal_contexts(id) ON DELETE SET NULL,
             recipe_source TEXT NOT NULL,
             mealie_slug TEXT,
             local_recipe_id TEXT,
@@ -168,6 +207,21 @@ def _create_tables(db: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_slot_sides_slot ON meal_slot_sides(slot_id);
+
+        CREATE TABLE IF NOT EXISTS meal_contexts (
+            id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            name TEXT NOT NULL,
+            cuisine TEXT NOT NULL DEFAULT '',
+            address TEXT NOT NULL DEFAULT '',
+            phone TEXT NOT NULL DEFAULT '',
+            website TEXT NOT NULL DEFAULT '',
+            notes TEXT NOT NULL DEFAULT '',
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_meal_contexts_kind ON meal_contexts(kind, is_active, name);
 
         CREATE TABLE IF NOT EXISTS sides (
             id TEXT PRIMARY KEY,
@@ -287,7 +341,20 @@ def list_plans(limit: int = 52) -> list[dict[str, Any]]:
 
 def _boolify_slot(slot: dict[str, Any]) -> dict[str, Any]:
     slot["makes_lunch"] = bool(slot.get("makes_lunch"))
+    slot["slot_kind"] = slot.get("slot_kind") or "recipe"
     return slot
+
+
+def _boolify_context(context: dict[str, Any]) -> dict[str, Any]:
+    context["is_active"] = bool(context.get("is_active", 1))
+    return context
+
+
+def _context_for_slot(db: sqlite3.Connection, context_id: str | None) -> dict[str, Any] | None:
+    if not context_id:
+        return None
+    row = db.execute("SELECT * FROM meal_contexts WHERE id=?", (context_id,)).fetchone()
+    return _boolify_context(dict(row)) if row else None
 
 
 def _tags_for_slot(db: sqlite3.Connection, slot: dict[str, Any],
@@ -314,6 +381,7 @@ def list_slots_for_plan(plan_id: str) -> list[dict[str, Any]]:
         for slot in slots:
             slot["sides"] = _get_sides_for_slot(db, slot["id"])
             slot["tags"] = _tags_for_slot(db, slot, tags_map)
+            slot["context"] = _context_for_slot(db, slot.get("context_id"))
         return slots
 
 
@@ -325,6 +393,7 @@ def get_slot(slot_id: str) -> dict[str, Any] | None:
         slot = _boolify_slot(dict(row))
         slot["sides"] = _get_sides_for_slot(db, slot_id)
         slot["tags"] = _tags_for_slot(db, slot, _canonical_tags_map(db))
+        slot["context"] = _context_for_slot(db, slot.get("context_id"))
         return slot
 
 
@@ -339,6 +408,7 @@ def list_slots_for_range(start_date: str, end_date: str) -> list[dict[str, Any]]
         for slot in slots:
             slot["sides"] = _get_sides_for_slot(db, slot["id"])
             slot["tags"] = _tags_for_slot(db, slot, tags_map)
+            slot["context"] = _context_for_slot(db, slot.get("context_id"))
         return slots
 
 
@@ -348,6 +418,8 @@ def upsert_slot(
     recipe_source: str,
     recipe_name: str,
     actor_name: str,
+    slot_kind: str = "recipe",
+    context_id: str | None = None,
     mealie_slug: str | None = None,
     local_recipe_id: str | None = None,
     free_text: str | None = None,
@@ -363,20 +435,20 @@ def upsert_slot(
         if existing:
             slot_id = existing["id"]
             db.execute(
-                """UPDATE meal_slots SET recipe_source=?, mealie_slug=?, local_recipe_id=?,
+                """UPDATE meal_slots SET slot_kind=?, context_id=?, recipe_source=?, mealie_slug=?, local_recipe_id=?,
                    free_text=?, recipe_name=?, makes_lunch=?, notes=?, updated_at=?
                    WHERE id=?""",
-                (recipe_source, mealie_slug, local_recipe_id, free_text,
+                (slot_kind, context_id, recipe_source, mealie_slug, local_recipe_id, free_text,
                  recipe_name, int(makes_lunch), notes, now, slot_id),
             )
         else:
             slot_id = new_id()
             db.execute(
                 """INSERT INTO meal_slots
-                   (id, plan_id, slot_date, recipe_source, mealie_slug, local_recipe_id,
+                   (id, plan_id, slot_date, slot_kind, context_id, recipe_source, mealie_slug, local_recipe_id,
                     free_text, recipe_name, makes_lunch, notes, created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (slot_id, plan_id, slot_date, recipe_source, mealie_slug, local_recipe_id,
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (slot_id, plan_id, slot_date, slot_kind, context_id, recipe_source, mealie_slug, local_recipe_id,
                  free_text, recipe_name, int(makes_lunch), notes, now, now),
             )
         _record_notification_event(
@@ -387,6 +459,7 @@ def upsert_slot(
         slot = _boolify_slot(dict(db.execute("SELECT * FROM meal_slots WHERE id=?", (slot_id,)).fetchone()))
         slot["sides"] = _get_sides_for_slot(db, slot_id)
         slot["tags"] = _tags_for_slot(db, slot, _canonical_tags_map(db))
+        slot["context"] = _context_for_slot(db, slot.get("context_id"))
         return slot
 
 
@@ -427,6 +500,7 @@ def move_slot(slot_id: str, new_date: str, actor_name: str) -> dict[str, Any]:
         slot = _boolify_slot(dict(db.execute("SELECT * FROM meal_slots WHERE id=?", (slot_id,)).fetchone()))
         slot["sides"] = _get_sides_for_slot(db, slot_id)
         slot["tags"] = _tags_for_slot(db, slot, _canonical_tags_map(db))
+        slot["context"] = _context_for_slot(db, slot.get("context_id"))
         return slot
 
 
@@ -457,7 +531,85 @@ def swap_slots(slot_id_a: str, slot_id_b: str, actor_name: str) -> tuple[dict, d
         tags_map = _canonical_tags_map(db)
         updated_a["tags"] = _tags_for_slot(db, updated_a, tags_map)
         updated_b["tags"] = _tags_for_slot(db, updated_b, tags_map)
+        updated_a["context"] = _context_for_slot(db, updated_a.get("context_id"))
+        updated_b["context"] = _context_for_slot(db, updated_b.get("context_id"))
         return updated_a, updated_b
+
+
+# ---------------------------------------------------------------------------
+# meal_contexts (famille, invitations, restaurants)
+# ---------------------------------------------------------------------------
+
+def list_meal_contexts(kind: str | None = None, include_inactive: bool = False) -> list[dict[str, Any]]:
+    with connect() as db:
+        clauses = []
+        params: list[Any] = []
+        if kind:
+            clauses.append("kind=?")
+            params.append(kind)
+        if not include_inactive:
+            clauses.append("is_active=1")
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = db.execute(
+            f"SELECT * FROM meal_contexts {where} ORDER BY kind, name",
+            params,
+        ).fetchall()
+        return [_boolify_context(dict(r)) for r in rows]
+
+
+def get_meal_context(context_id: str) -> dict[str, Any] | None:
+    with connect() as db:
+        row = db.execute("SELECT * FROM meal_contexts WHERE id=?", (context_id,)).fetchone()
+        return _boolify_context(dict(row)) if row else None
+
+
+def create_meal_context(
+    kind: str,
+    name: str,
+    cuisine: str = "",
+    address: str = "",
+    phone: str = "",
+    website: str = "",
+    notes: str = "",
+) -> dict[str, Any]:
+    with connect() as db:
+        context_id = new_id()
+        now = now_iso()
+        db.execute(
+            """INSERT INTO meal_contexts
+               (id, kind, name, cuisine, address, phone, website, notes, is_active, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (context_id, kind, name.strip(), cuisine.strip(), address.strip(), phone.strip(),
+             website.strip(), notes.strip(), 1, now, now),
+        )
+        row = db.execute("SELECT * FROM meal_contexts WHERE id=?", (context_id,)).fetchone()
+        return _boolify_context(dict(row))
+
+
+def update_meal_context(context_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    allowed = {"kind", "name", "cuisine", "address", "phone", "website", "notes", "is_active"}
+    with connect() as db:
+        updates: list[tuple[str, Any]] = []
+        for key, value in payload.items():
+            if key not in allowed:
+                continue
+            if key == "is_active":
+                updates.append((key, int(bool(value))))
+            elif value is not None:
+                updates.append((key, str(value).strip()))
+        if updates:
+            set_clause = ", ".join(f"{k}=?" for k, _ in updates)
+            values = [v for _, v in updates] + [now_iso(), context_id]
+            db.execute(f"UPDATE meal_contexts SET {set_clause}, updated_at=? WHERE id=?", values)
+        row = db.execute("SELECT * FROM meal_contexts WHERE id=?", (context_id,)).fetchone()
+        if not row:
+            raise ValueError("Contexte introuvable")
+        return _boolify_context(dict(row))
+
+
+def delete_meal_context(context_id: str) -> None:
+    with connect() as db:
+        db.execute("UPDATE meal_contexts SET is_active=0, updated_at=? WHERE id=?", (now_iso(), context_id))
 
 
 # ---------------------------------------------------------------------------
@@ -988,7 +1140,7 @@ def recipe_usage_stats() -> dict[str, dict[str, Any]]:
     with connect() as db:
         rows = db.execute(
             "SELECT recipe_name, COUNT(*) as count, MAX(slot_date) as last_date "
-            "FROM meal_slots GROUP BY recipe_name"
+            "FROM meal_slots WHERE slot_kind IN ('recipe', 'hosting') GROUP BY recipe_name"
         ).fetchall()
         return {r["recipe_name"]: {"count": r["count"], "last_date": r["last_date"]} for r in rows}
 
@@ -1003,11 +1155,39 @@ def recipe_frequency(weeks: int = 12) -> list[dict[str, Any]]:
                       MIN(slot_date) as first_date
                FROM meal_slots
                WHERE slot_date >= date('now', ? || ' days')
+                 AND slot_kind IN ('recipe', 'hosting')
                GROUP BY recipe_name
                ORDER BY count DESC""",
             (f"-{weeks * 7}",),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def meal_context_stats(weeks: int = 12) -> dict[str, Any]:
+    """Occurrences par contexte : chez qui on mange, qui on reçoit, restos."""
+    with connect() as db:
+        rows = db.execute(
+            """SELECT ms.slot_kind as kind,
+                      ms.context_id,
+                      COALESCE(mc.name, ms.recipe_name) as name,
+                      COUNT(*) as count,
+                      MAX(ms.slot_date) as last_date
+               FROM meal_slots ms
+               LEFT JOIN meal_contexts mc ON mc.id = ms.context_id
+               WHERE ms.slot_date >= date('now', ? || ' days')
+                 AND ms.slot_kind IN ('away', 'hosting', 'restaurant')
+               GROUP BY ms.slot_kind, ms.context_id, COALESCE(mc.name, ms.recipe_name)
+               ORDER BY count DESC, name""",
+            (f"-{weeks * 7}",),
+        ).fetchall()
+        summary = {"away": 0, "hosting": 0, "restaurant": 0}
+        by_kind: dict[str, list[dict[str, Any]]] = {"away": [], "hosting": [], "restaurant": []}
+        for row in rows:
+            item = dict(row)
+            kind = item["kind"]
+            summary[kind] = summary.get(kind, 0) + item["count"]
+            by_kind.setdefault(kind, []).append(item)
+        return {"summary": summary, "by_kind": by_kind}
 
 
 def side_frequency(weeks: int = 12) -> list[dict[str, Any]]:

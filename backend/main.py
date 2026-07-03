@@ -16,34 +16,40 @@ logger = logging.getLogger(__name__)
 from menu_app.store import (
     clear_slot,
     create_canonical_tag,
+    create_family_member,
     create_local_recipe,
+    create_meal_context,
     create_side,
     delete_canonical_tag,
+    delete_family_member,
     delete_local_recipe,
+    delete_meal_context,
     delete_push_subscription,
     delete_side,
     get_local_recipe,
+    get_meal_context,
     get_or_create_plan,
     get_recipe_meta,
     get_slot,
-    create_family_member,
-    delete_family_member,
     import_mealie_tags,
     list_canonical_tags,
     list_child_colors,
     list_family_members,
     list_local_recipes,
+    list_meal_contexts,
     list_plans,
     list_sides,
     list_slots_for_plan,
     list_slots_for_range,
     list_tag_mappings,
+    meal_context_stats,
     move_slot,
     recipe_frequency,
     recipe_usage_stats,
     set_child_color,
     side_frequency,
     update_family_member,
+    update_meal_context,
     side_usage_stats,
     update_canonical_tag,
     save_push_subscription,
@@ -303,8 +309,25 @@ def put_slot(
     actor: Actor = Depends(require_permission("menu.edit")),
 ) -> dict[str, Any]:
     plan = get_or_create_plan(week_start)
+    slot_kind = body.get("slot_kind", "recipe")
+    context_id = body.get("context_id")
     source = body.get("recipe_source", "free")
     recipe_name = body.get("recipe_name", "").strip()
+    if slot_kind not in ("recipe", "away", "hosting", "restaurant"):
+        raise HTTPException(status_code=422, detail="slot_kind invalide")
+    if slot_kind in ("away", "restaurant"):
+        if not context_id:
+            raise HTTPException(status_code=422, detail="context_id requis")
+        context = get_meal_context(context_id)
+        if not context:
+            raise HTTPException(status_code=404, detail="Contexte introuvable")
+        source = "free"
+        recipe_name = recipe_name or context["name"]
+    elif slot_kind == "hosting":
+        if not context_id:
+            raise HTTPException(status_code=422, detail="context_id requis")
+        if not get_meal_context(context_id):
+            raise HTTPException(status_code=404, detail="Contexte introuvable")
     if not recipe_name:
         raise HTTPException(status_code=422, detail="recipe_name requis")
     return upsert_slot(
@@ -313,6 +336,8 @@ def put_slot(
         recipe_source=source,
         recipe_name=recipe_name,
         actor_name=actor.name,
+        slot_kind=slot_kind,
+        context_id=context_id,
         mealie_slug=body.get("mealie_slug"),
         local_recipe_id=body.get("local_recipe_id"),
         free_text=body.get("free_text"),
@@ -444,6 +469,64 @@ def api_delete_side(
     actor: Actor = Depends(require_permission("menu.edit")),
 ) -> dict:
     delete_side(side_id)
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Contextes de repas (famille / invitations / restaurants)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/meal-contexts")
+def api_list_meal_contexts(
+    kind: str | None = None,
+    include_inactive: bool = False,
+    actor: Actor = Depends(require_permission("menu.read")),
+) -> list[dict[str, Any]]:
+    return list_meal_contexts(kind, include_inactive)
+
+
+@app.post("/api/meal-contexts")
+def api_create_meal_context(
+    body: dict = Body(...),
+    actor: Actor = Depends(require_permission("settings.manage")),
+) -> dict[str, Any]:
+    kind = body.get("kind", "").strip()
+    name = body.get("name", "").strip()
+    if kind not in ("away", "hosting", "restaurant"):
+        raise HTTPException(status_code=422, detail="kind invalide")
+    if not name:
+        raise HTTPException(status_code=422, detail="name requis")
+    return create_meal_context(
+        kind=kind,
+        name=name,
+        cuisine=body.get("cuisine", ""),
+        address=body.get("address", ""),
+        phone=body.get("phone", ""),
+        website=body.get("website", ""),
+        notes=body.get("notes", ""),
+    )
+
+
+@app.patch("/api/meal-contexts/{context_id}")
+def api_update_meal_context(
+    context_id: str,
+    body: dict = Body(...),
+    actor: Actor = Depends(require_permission("settings.manage")),
+) -> dict[str, Any]:
+    if "kind" in body and body["kind"] not in ("away", "hosting", "restaurant"):
+        raise HTTPException(status_code=422, detail="kind invalide")
+    try:
+        return update_meal_context(context_id, body)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.delete("/api/meal-contexts/{context_id}")
+def api_delete_meal_context(
+    context_id: str,
+    actor: Actor = Depends(require_permission("settings.manage")),
+) -> dict:
+    delete_meal_context(context_id)
     return {"ok": True}
 
 
@@ -766,6 +849,14 @@ def api_frequency(
     actor: Actor = Depends(require_permission("menu.read")),
 ) -> list[dict]:
     return recipe_frequency(weeks)
+
+
+@app.get("/api/stats/contexts")
+def api_context_stats(
+    weeks: int = 12,
+    actor: Actor = Depends(require_permission("menu.read")),
+) -> dict[str, Any]:
+    return meal_context_stats(weeks)
 
 
 @app.get("/api/plans")

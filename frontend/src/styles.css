@@ -345,6 +345,10 @@ body {
 .badge-score-bad { background: #fee2e2; color: #991b1b; }
 .badge-weekend { background: var(--green-soft); color: var(--green); }
 .badge-ago { background: var(--bg); color: var(--muted); font-weight: 500; }
+.badge-context { background: #e0f2fe; color: #075985; }
+.badge-away { background: #ede9fe; color: #5b21b6; }
+.badge-hosting { background: #dcfce7; color: #166534; }
+.badge-restaurant { background: #fee2e2; color: #991b1b; }
 .tag-badge {
   height: 18px;
   min-width: 0;
@@ -594,6 +598,22 @@ body {
 .freq-table td { padding: 8px 8px; border-bottom: 1px solid var(--line); }
 .freq-table tr:last-child td { border-bottom: none; }
 .freq-bar { height: 6px; background: var(--green); border-radius: 3px; min-width: 4px; }
+.stats-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.stats-summary-item {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.stats-summary-item strong { font-size: 20px; color: var(--green); }
+.stats-summary-item span { font-size: 11px; color: var(--muted); }
 
 /* ── Paramètres ── */
 .settings-section { margin-bottom: 24px; }
@@ -614,6 +634,72 @@ body {
 .status-dot.pending { background: var(--amber); }
 .status-dot.confirmed { background: #22c55e; }
 .status-dot.ignored { background: var(--line); }
+
+/* ── Contextes repas ── */
+.meal-kind-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.meal-kind-btn {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  border-radius: var(--radius-sm);
+  padding: 10px 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+  cursor: pointer;
+}
+.meal-kind-btn.active { border-color: var(--green); color: var(--green); background: var(--green-soft); }
+.context-add-row {
+  display: grid;
+  grid-template-columns: minmax(100px, 140px) minmax(0, 1fr) auto;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.context-add-row input,
+.context-add-row select {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 7px 8px;
+  font-size: 14px;
+  background: var(--panel);
+}
+.context-add-row button {
+  background: var(--green);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 0 10px;
+  cursor: pointer;
+}
+.context-list { display: flex; flex-direction: column; gap: 6px; }
+.context-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  background: var(--panel);
+}
+.context-row.inactive { opacity: .5; }
+.context-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.context-extra-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+.context-extra-grid input,
+.context-notes {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  font-size: 13px;
+  background: var(--panel);
+}
 
 /* ── Modals ── */
 .modal-backdrop {
