@@ -636,19 +636,25 @@ body {
 .status-dot.ignored { background: var(--line); }
 
 /* ── Contextes repas ── */
-.meal-kind-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  margin-bottom: 12px;
+.meal-kind-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.meal-kind-prompt {
+  font-size: 11px;
+  color: var(--muted);
+  margin-right: 2px;
 }
 .meal-kind-btn {
   border: 1px solid var(--line);
   background: var(--panel);
-  border-radius: var(--radius-sm);
-  padding: 10px 8px;
-  font-size: 13px;
-  font-weight: 700;
+  border-radius: 20px;
+  padding: 3px 9px;
+  font-size: 11px;
+  font-weight: 600;
   color: var(--muted);
   cursor: pointer;
 }
@@ -687,19 +693,6 @@ body {
 }
 .context-row.inactive { opacity: .5; }
 .context-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
-.context-extra-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
-}
-.context-extra-grid input,
-.context-notes {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  padding: 6px 8px;
-  font-size: 13px;
-  background: var(--panel);
-}
 
 /* ── Modals ── */
 .modal-backdrop {

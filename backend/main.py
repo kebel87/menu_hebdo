@@ -499,11 +499,6 @@ def api_create_meal_context(
     return create_meal_context(
         kind=kind,
         name=name,
-        cuisine=body.get("cuisine", ""),
-        address=body.get("address", ""),
-        phone=body.get("phone", ""),
-        website=body.get("website", ""),
-        notes=body.get("notes", ""),
     )
 
 

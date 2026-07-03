@@ -145,11 +145,6 @@ interface MealContext {
   id: string;
   kind: "away" | "hosting" | "restaurant";
   name: string;
-  cuisine: string;
-  address: string;
-  phone: string;
-  website: string;
-  notes: string;
   is_active: boolean;
 }
 
@@ -348,7 +343,7 @@ function slotTitle(slot: MealSlot): string {
 
 function slotSubtitle(slot: MealSlot): string {
   if (slot.slot_kind === "hosting") return `Reçoit ${slot.context?.name ?? "famille"}`;
-  if (slot.slot_kind === "restaurant") return slot.context?.cuisine || "Restaurant";
+  if (slot.slot_kind === "restaurant") return "Restaurant";
   if (slot.sides.length > 0) return slot.sides.map((s) => s.name).join(", ");
   return "";
 }
@@ -1312,13 +1307,23 @@ function MealWizard({
         {step === "meal" && (
           <>
             {mode !== "meal" && (
-              <div className="meal-kind-grid">
-                {[
-                  ["recipe", "Maison"],
-                  ["away", "Chez famille"],
-                  ["hosting", "On reçoit"],
-                  ["restaurant", "Restaurant"],
-                ].map(([kind, label]) => (
+              <div className="meal-kind-row">
+                <span className="meal-kind-prompt">
+                  {slotKind === "recipe" ? "Pas à la maison ?" : "Type"}
+                </span>
+                {(slotKind === "recipe"
+                  ? [
+                      ["away", "Chez famille"],
+                      ["hosting", "On reçoit"],
+                      ["restaurant", "Restaurant"],
+                    ]
+                  : [
+                      ["recipe", "Maison"],
+                      ["away", "Chez famille"],
+                      ["hosting", "On reçoit"],
+                      ["restaurant", "Restaurant"],
+                    ]
+                ).map(([kind, label]) => (
                   <button
                     key={kind}
                     type="button"
@@ -2760,36 +2765,6 @@ function MealContextsSection() {
                       className="tag-name-input"
                       onBlur={(e) => e.target.value !== c.name && patchContext(c.id, { name: e.target.value })}
                       onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
-                    />
-                    {kind === "restaurant" && (
-                      <div className="context-extra-grid">
-                        <input
-                          defaultValue={c.cuisine}
-                          placeholder="Cuisine"
-                          onBlur={(e) => e.target.value !== c.cuisine && patchContext(c.id, { cuisine: e.target.value })}
-                        />
-                        <input
-                          defaultValue={c.website}
-                          placeholder="Site web"
-                          onBlur={(e) => e.target.value !== c.website && patchContext(c.id, { website: e.target.value })}
-                        />
-                        <input
-                          defaultValue={c.phone}
-                          placeholder="Téléphone"
-                          onBlur={(e) => e.target.value !== c.phone && patchContext(c.id, { phone: e.target.value })}
-                        />
-                        <input
-                          defaultValue={c.address}
-                          placeholder="Adresse"
-                          onBlur={(e) => e.target.value !== c.address && patchContext(c.id, { address: e.target.value })}
-                        />
-                      </div>
-                    )}
-                    <input
-                      defaultValue={c.notes}
-                      placeholder="Notes"
-                      className="context-notes"
-                      onBlur={(e) => e.target.value !== c.notes && patchContext(c.id, { notes: e.target.value })}
                     />
                   </div>
                   <button className="btn-icon" onClick={() => deleteContext(c.id)} title="Désactiver">

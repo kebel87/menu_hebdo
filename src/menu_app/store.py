@@ -111,17 +111,16 @@ def _apply_migrations(db: sqlite3.Connection) -> None:
             id TEXT PRIMARY KEY,
             kind TEXT NOT NULL,
             name TEXT NOT NULL,
-            cuisine TEXT NOT NULL DEFAULT '',
-            address TEXT NOT NULL DEFAULT '',
-            phone TEXT NOT NULL DEFAULT '',
-            website TEXT NOT NULL DEFAULT '',
-            notes TEXT NOT NULL DEFAULT '',
             is_active INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
     """)
     db.execute("CREATE INDEX IF NOT EXISTS idx_meal_contexts_kind ON meal_contexts(kind, is_active, name)")
+    context_cols = {row[1] for row in db.execute("PRAGMA table_info(meal_contexts)").fetchall()}
+    for obsolete_col in ("cuisine", "address", "phone", "website", "notes"):
+        if obsolete_col in context_cols:
+            db.execute(f"ALTER TABLE meal_contexts DROP COLUMN {obsolete_col}")
     slot_cols = {row[1] for row in db.execute("PRAGMA table_info(meal_slots)").fetchall()}
     if "slot_kind" not in slot_cols:
         db.execute("ALTER TABLE meal_slots ADD COLUMN slot_kind TEXT NOT NULL DEFAULT 'recipe'")
@@ -160,11 +159,6 @@ def _create_tables(db: sqlite3.Connection) -> None:
             id TEXT PRIMARY KEY,
             kind TEXT NOT NULL,
             name TEXT NOT NULL,
-            cuisine TEXT NOT NULL DEFAULT '',
-            address TEXT NOT NULL DEFAULT '',
-            phone TEXT NOT NULL DEFAULT '',
-            website TEXT NOT NULL DEFAULT '',
-            notes TEXT NOT NULL DEFAULT '',
             is_active INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
@@ -212,11 +206,6 @@ def _create_tables(db: sqlite3.Connection) -> None:
             id TEXT PRIMARY KEY,
             kind TEXT NOT NULL,
             name TEXT NOT NULL,
-            cuisine TEXT NOT NULL DEFAULT '',
-            address TEXT NOT NULL DEFAULT '',
-            phone TEXT NOT NULL DEFAULT '',
-            website TEXT NOT NULL DEFAULT '',
-            notes TEXT NOT NULL DEFAULT '',
             is_active INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
@@ -566,28 +555,22 @@ def get_meal_context(context_id: str) -> dict[str, Any] | None:
 def create_meal_context(
     kind: str,
     name: str,
-    cuisine: str = "",
-    address: str = "",
-    phone: str = "",
-    website: str = "",
-    notes: str = "",
 ) -> dict[str, Any]:
     with connect() as db:
         context_id = new_id()
         now = now_iso()
         db.execute(
             """INSERT INTO meal_contexts
-               (id, kind, name, cuisine, address, phone, website, notes, is_active, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-            (context_id, kind, name.strip(), cuisine.strip(), address.strip(), phone.strip(),
-             website.strip(), notes.strip(), 1, now, now),
+               (id, kind, name, is_active, created_at, updated_at)
+               VALUES (?,?,?,?,?,?)""",
+            (context_id, kind, name.strip(), 1, now, now),
         )
         row = db.execute("SELECT * FROM meal_contexts WHERE id=?", (context_id,)).fetchone()
         return _boolify_context(dict(row))
 
 
 def update_meal_context(context_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    allowed = {"kind", "name", "cuisine", "address", "phone", "website", "notes", "is_active"}
+    allowed = {"kind", "name", "is_active"}
     with connect() as db:
         updates: list[tuple[str, Any]] = []
         for key, value in payload.items():
