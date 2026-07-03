@@ -727,6 +727,8 @@ def _parse_local_recipe(r: dict, tags_map: dict[str, dict[str, Any]]) -> dict:
     r["tag_ids"] = tag_ids
     r["tags"] = [tags_map[i] for i in tag_ids if i in tags_map]
     r["liked_by"] = json.loads(r.get("liked_by_json") or "[]")
+    r["is_weekend"] = bool(r.get("is_weekend"))
+    r["makes_lunch"] = bool(r.get("makes_lunch"))
     return r
 
 
@@ -736,6 +738,9 @@ def _parse_local_recipe(r: dict, tags_map: dict[str, dict[str, Any]]) -> dict:
 
 def _parse_recipe_meta(r: dict) -> dict:
     r["liked_by"] = json.loads(r.get("liked_by_json") or "[]")
+    r["is_weekend"] = bool(r.get("is_weekend"))
+    r["makes_lunch"] = bool(r.get("makes_lunch"))
+    r["is_hidden"] = bool(r.get("is_hidden"))
     return r
 
 
