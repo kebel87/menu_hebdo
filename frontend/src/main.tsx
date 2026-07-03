@@ -219,6 +219,17 @@ function useChildren(): Child[] {
   return children;
 }
 
+// Enfants (calendrier_familiale) + parents (locaux) : tout le monde dont les
+// préférences comptent pour "aimé par". Ne pas utiliser pour la présence du
+// jour (useChildren) — les parents n'ont pas de garde partagée à suivre.
+function usePeople(): Child[] {
+  const [people, setPeople] = useState<Child[]>([]);
+  useEffect(() => {
+    api<Child[]>("/api/people").then(setPeople).catch(() => {});
+  }, []);
+  return people;
+}
+
 function mondayOf(d: Date): Date {
   const day = d.getDay();
   const diff = day === 0 ? -6 : 1 - day;
@@ -1225,7 +1236,7 @@ function RecipesScreen({ canEdit }: { canEdit: boolean }) {
   const [detail, setDetail] = useState<Recipe | null>(null);
   const [showAddLocal, setShowAddLocal] = useState(false);
   const filterTags = useFilterableTags();
-  const children = useChildren();
+  const children = usePeople();
 
   useEffect(() => {
     api<Recipe[]>("/api/recipes?include_hidden=true")
@@ -1588,7 +1599,7 @@ function RecipeDetailModal({
   const [tagIds, setTagIds] = useState<string[]>(recipe.tag_ids ?? []);
   const [allTags, setAllTags] = useState<CanonicalTag[]>([]);
   const [likedBy, setLikedBy] = useState<string[]>(recipe.liked_by ?? []);
-  const allChildren = useChildren();
+  const allChildren = usePeople();
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -1806,7 +1817,7 @@ function LocalRecipeModal({
   const [tagIds, setTagIds] = useState<string[]>(recipe?.tag_ids ?? []);
   const [allTags, setAllTags] = useState<CanonicalTag[]>([]);
   const [likedBy, setLikedBy] = useState<string[]>(recipe?.liked_by ?? []);
-  const allChildren = useChildren();
+  const allChildren = usePeople();
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -2042,6 +2053,7 @@ function SettingsScreen({ canAdmin }: { canAdmin: boolean }) {
       {canAdmin && <TagMappingsSection />}
       {canAdmin && <CanonicalTagsSection />}
       {canAdmin && <ChildColorsSection />}
+      {canAdmin && <FamilyMembersSection />}
       <NotificationsSection />
     </div>
   );
@@ -2266,6 +2278,88 @@ function ChildColorsSection() {
             <span style={{ flex: 1, fontSize: 14 }}>{c.name} ({c.short_label})</span>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+function FamilyMembersSection() {
+  const [members, setMembers] = useState<Child[]>([]);
+  const [newName, setNewName] = useState("");
+
+  useEffect(() => {
+    api<Child[]>("/api/family-members").then(setMembers).catch(() => {});
+  }, []);
+
+  async function addMember() {
+    if (!newName.trim()) return;
+    const m = await api<Child>("/api/family-members", {
+      method: "POST",
+      body: JSON.stringify({ name: newName.trim() }),
+    });
+    setMembers((prev) => [...prev, m].sort((a, b) => a.name.localeCompare(b.name)));
+    setNewName("");
+  }
+
+  async function rename(id: string, name: string) {
+    if (!name.trim()) return;
+    const m = await api<Child>(`/api/family-members/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name: name.trim() }),
+    });
+    setMembers((prev) => prev.map((x) => (x.id === id ? m : x)).sort((a, b) => a.name.localeCompare(b.name)));
+  }
+
+  async function recolor(id: string, color: string) {
+    await api(`/api/family-members/${id}`, { method: "PATCH", body: JSON.stringify({ color }) });
+    setMembers((prev) => prev.map((m) => (m.id === id ? { ...m, color } : m)));
+  }
+
+  async function deleteMember(id: string) {
+    await api(`/api/family-members/${id}`, { method: "DELETE" });
+    setMembers((prev) => prev.filter((m) => m.id !== id));
+  }
+
+  return (
+    <div className="settings-section">
+      <h2>Autres membres de la famille</h2>
+      <p style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8 }}>
+        Pour les préférences de repas de personnes hors calendrier familial (parents, etc.).
+      </p>
+      <div className="canonical-tags-list" style={{ marginBottom: 8 }}>
+        {members.map((m) => (
+          <div key={m.id} className="canonical-tag-row">
+            <input
+              type="color"
+              value={m.color || DEFAULT_TAG_COLOR}
+              onChange={(e) => recolor(m.id, e.target.value)}
+              title="Couleur du tag dans Repas"
+              className="tag-color-input"
+            />
+            <input
+              defaultValue={m.name}
+              key={m.id + m.name}
+              onBlur={(e) => e.target.value !== m.name && rename(m.id, e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+              className="tag-name-input"
+            />
+            <button className="btn-icon" onClick={() => deleteMember(m.id)} title="Supprimer">
+              <X size={13} />
+            </button>
+          </div>
+        ))}
+        {members.length === 0 && (
+          <div className="empty-state"><p>Aucun membre ajouté</p></div>
+        )}
+      </div>
+      <div className="sides-add">
+        <input
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+          placeholder="Nom…"
+          onKeyDown={(e) => e.key === "Enter" && addMember()}
+        />
+        <button onClick={addMember}><Plus size={14} /></button>
       </div>
     </div>
   );

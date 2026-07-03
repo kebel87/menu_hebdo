@@ -22,9 +22,12 @@ from menu_app.store import (
     get_or_create_plan,
     get_recipe_meta,
     get_slot,
+    create_family_member,
+    delete_family_member,
     import_mealie_tags,
     list_canonical_tags,
     list_child_colors,
+    list_family_members,
     list_local_recipes,
     list_plans,
     list_sides,
@@ -36,6 +39,7 @@ from menu_app.store import (
     recipe_usage_stats,
     set_child_color,
     side_frequency,
+    update_family_member,
     side_usage_stats,
     update_canonical_tag,
     save_push_subscription,
@@ -209,6 +213,61 @@ def api_update_child_color(
     actor: Actor = Depends(require_permission("settings.manage")),
 ) -> dict:
     return set_child_color(child_id, body.get("color", ""))
+
+
+@app.get("/api/people")
+def api_people(actor: Actor = Depends(require_permission("menu.read"))) -> list[dict[str, Any]]:
+    """Tout le monde dont les préférences comptent pour 'aimé par' : les enfants
+    (calendrier_familiale) + les parents (locaux, hors garde partagée). À ne pas
+    confondre avec /api/children, qui ne sert qu'à la présence du jour."""
+    children = calendar_client.get_children()
+    colors = list_child_colors()
+    for c in children:
+        c["color"] = colors.get(c["id"], "")
+    return children + list_family_members()
+
+
+@app.get("/api/family-members")
+def api_list_family_members(actor: Actor = Depends(require_permission("menu.read"))) -> list[dict[str, Any]]:
+    return list_family_members()
+
+
+@app.post("/api/family-members")
+def api_create_family_member(
+    body: dict = Body(...),
+    actor: Actor = Depends(require_permission("settings.manage")),
+) -> dict:
+    name = body.get("name", "").strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="name requis")
+    short_label = body.get("short_label", "").strip() or name[:1].upper()
+    return create_family_member(name, short_label, body.get("color", ""))
+
+
+@app.patch("/api/family-members/{member_id}")
+def api_update_family_member(
+    member_id: str,
+    body: dict = Body(...),
+    actor: Actor = Depends(require_permission("settings.manage")),
+) -> dict:
+    try:
+        return update_family_member(
+            member_id,
+            name=body.get("name"),
+            short_label=body.get("short_label"),
+            color=body.get("color"),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.delete("/api/family-members/{member_id}")
+def api_delete_family_member(
+    member_id: str,
+    actor: Actor = Depends(require_permission("settings.manage")),
+) -> dict:
+    delete_family_member(member_id)
+    return {"ok": True}
 
 
 @app.get("/api/month/{year}/{month}")
@@ -503,13 +562,20 @@ def api_recipes(
     return _build_recipe_list(include_hidden)
 
 
-def _present_children_for_date(iso_date: str | None) -> set[str]:
-    if not iso_date or not calendar_client.is_configured():
+def _favorite_boost_group_for_date(iso_date: str | None) -> set[str]:
+    """Qui privilégier pour les favoris du jour : les enfants présents s'il y en
+    a (garde partagée, via calendrier_familiale) sinon les parents — ce sont eux
+    qui mangent quand la maison est vide d'enfants (ou si le calendrier est
+    indisponible/non configuré, faute de mieux). Aucune date fournie -> pas de
+    boost du tout (utilisé par les appelants qui ne se soucient pas du jour)."""
+    if not iso_date:
         return set()
-    presence = calendar_client.get_presence(iso_date)
-    if not presence:
-        return set()
-    return set(presence.get("presentChildren", []))
+    if calendar_client.is_configured():
+        presence = calendar_client.get_presence(iso_date)
+        calendar_present = set(presence.get("presentChildren", [])) if presence else set()
+        if calendar_present:
+            return calendar_present
+    return {m["id"] for m in list_family_members()}
 
 
 def _recipe_key(r: dict[str, Any]) -> tuple[str, str | None]:
@@ -524,19 +590,19 @@ def api_recipe_favorites(
 ) -> list[dict[str, Any]]:
     """Recettes les plus fréquemment planifiées (12 dernières semaines).
 
-    Si `date` est fourni, les recettes aimées par au moins un enfant present
-    ce jour-la (garde partagee, via calendrier_familiale) remontent en tete,
-    sans changer l'ordre relatif issu de la frequence."""
+    Si `date` est fourni, les recettes aimées par le groupe à privilégier ce
+    jour-là (enfants présents, sinon parents) remontent en tête, sans changer
+    l'ordre relatif issu de la fréquence."""
     freq = recipe_frequency(weeks=12)
     order = {f["recipe_name"]: i for i, f in enumerate(freq)}
     all_recipes = _build_recipe_list(include_hidden=False)
     favorites = [r for r in all_recipes if r["name"] in order]
     favorites.sort(key=lambda r: order[r["name"]])
 
-    present = _present_children_for_date(date)
-    if present:
+    boost_group = _favorite_boost_group_for_date(date)
+    if boost_group:
         liked_keys = {
-            _recipe_key(r) for r in favorites if set(r.get("liked_by", [])) & present
+            _recipe_key(r) for r in favorites if set(r.get("liked_by", [])) & boost_group
         }
         favorites.sort(key=lambda r: 0 if _recipe_key(r) in liked_keys else 1)
 

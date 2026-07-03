@@ -82,6 +82,28 @@ def _apply_migrations(db: sqlite3.Connection) -> None:
             updated_at TEXT NOT NULL
         )
     """)
+    existing_tables = {
+        row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    }
+    if "family_members" not in existing_tables:
+        db.execute("""
+            CREATE TABLE family_members (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                short_label TEXT NOT NULL,
+                color TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            )
+        """)
+        now = now_iso()
+        # Amélie et Kevin ne sont pas suivis par calendrier_familiale (pas de garde
+        # partagée à gérer pour les parents) mais ont des préférences de repas au
+        # même titre que les enfants.
+        for member_id, name, short_label in (("kevin", "Kevin", "K"), ("amelie", "Amélie", "A")):
+            db.execute(
+                "INSERT INTO family_members (id, name, short_label, color, created_at) VALUES (?,?,?,?,?)",
+                (member_id, name, short_label, "", now),
+            )
 
 
 def _backfill_weekend_lunch_tags(db: sqlite3.Connection) -> None:
@@ -530,6 +552,58 @@ def set_child_color(child_id: str, color: str) -> dict[str, Any]:
             (child_id, color.strip(), now),
         )
         return {"child_id": child_id, "color": color.strip()}
+
+
+# ---------------------------------------------------------------------------
+# family_members (parents et autres adultes hors calendrier_familiale, mais
+# dont les préférences de repas comptent pour "aimé par")
+# ---------------------------------------------------------------------------
+
+def list_family_members() -> list[dict[str, Any]]:
+    with connect() as db:
+        rows = db.execute("SELECT * FROM family_members ORDER BY name").fetchall()
+        return [dict(r) for r in rows]
+
+
+def create_family_member(name: str, short_label: str, color: str = "") -> dict[str, Any]:
+    with connect() as db:
+        member_id = new_id()
+        now = now_iso()
+        db.execute(
+            "INSERT INTO family_members (id, name, short_label, color, created_at) VALUES (?,?,?,?,?)",
+            (member_id, name.strip(), short_label.strip()[:2] or name.strip()[:1].upper(), color.strip(), now),
+        )
+        row = db.execute("SELECT * FROM family_members WHERE id=?", (member_id,)).fetchone()
+        return dict(row)
+
+
+def update_family_member(
+    member_id: str,
+    name: str | None = None,
+    short_label: str | None = None,
+    color: str | None = None,
+) -> dict[str, Any]:
+    with connect() as db:
+        updates: list[tuple[str, Any]] = []
+        if name is not None and name.strip():
+            updates.append(("name", name.strip()))
+        if short_label is not None and short_label.strip():
+            updates.append(("short_label", short_label.strip()[:2]))
+        if color is not None:
+            updates.append(("color", color.strip()))
+        if updates:
+            set_clause = ", ".join(f"{k}=?" for k, _ in updates)
+            values = [v for _, v in updates] + [member_id]
+            db.execute(f"UPDATE family_members SET {set_clause} WHERE id=?", values)
+        row = db.execute("SELECT * FROM family_members WHERE id=?", (member_id,)).fetchone()
+        if not row:
+            raise ValueError("Membre introuvable")
+        return dict(row)
+
+
+def delete_family_member(member_id: str) -> None:
+    with connect() as db:
+        db.execute("DELETE FROM family_members WHERE id=?", (member_id,))
 
 
 def _get_sides_for_slot(db: sqlite3.Connection, slot_id: str) -> list[dict[str, Any]]:
