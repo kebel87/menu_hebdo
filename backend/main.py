@@ -386,7 +386,7 @@ def api_side_favorites(
     """Accompagnements les plus fréquemment utilisés (12 dernières semaines)."""
     freq = side_frequency(weeks=12)
     return [
-        {"name": f["name"], "side_id": f.get("side_id"), "category": f.get("category", "")}
+        {"name": f["name"], "side_id": f.get("side_id")}
         for f in freq[:limit]
     ]
 
@@ -410,7 +410,7 @@ def api_create_side(
     name = body.get("name", "").strip()
     if not name:
         raise HTTPException(status_code=422, detail="name requis")
-    return create_side(name, body.get("category", ""))
+    return create_side(name)
 
 
 @app.patch("/api/sides/{side_id}")
@@ -420,7 +420,7 @@ def api_update_side(
     actor: Actor = Depends(require_permission("menu.edit")),
 ) -> dict:
     try:
-        return update_side(side_id, body.get("name"), body.get("category"), body.get("is_active"))
+        return update_side(side_id, body.get("name"), body.get("is_active"))
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 

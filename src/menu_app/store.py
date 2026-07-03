@@ -75,6 +75,8 @@ def _apply_migrations(db: sqlite3.Connection) -> None:
     side_cols = {row[1] for row in db.execute("PRAGMA table_info(sides)").fetchall()}
     if "is_active" not in side_cols:
         db.execute("ALTER TABLE sides ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
+    if "category" in side_cols:
+        db.execute("ALTER TABLE sides DROP COLUMN category")
     db.execute("""
         CREATE TABLE IF NOT EXISTS child_colors (
             child_id TEXT PRIMARY KEY,
@@ -170,7 +172,6 @@ def _create_tables(db: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS sides (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL UNIQUE,
-            category TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL
         );
 
@@ -471,21 +472,21 @@ def _boolify_side(side: dict[str, Any]) -> dict[str, Any]:
 def list_sides(include_inactive: bool = False) -> list[dict[str, Any]]:
     with connect() as db:
         if include_inactive:
-            rows = db.execute("SELECT * FROM sides ORDER BY category, name").fetchall()
+            rows = db.execute("SELECT * FROM sides ORDER BY name").fetchall()
         else:
             rows = db.execute(
-                "SELECT * FROM sides WHERE is_active=1 ORDER BY category, name"
+                "SELECT * FROM sides WHERE is_active=1 ORDER BY name"
             ).fetchall()
         return [_boolify_side(dict(r)) for r in rows]
 
 
-def create_side(name: str, category: str = "") -> dict[str, Any]:
+def create_side(name: str) -> dict[str, Any]:
     with connect() as db:
         side_id = new_id()
         now = now_iso()
         db.execute(
-            "INSERT INTO sides (id, name, category, is_active, created_at) VALUES (?,?,?,?,?)",
-            (side_id, name.strip(), category.strip(), 1, now),
+            "INSERT INTO sides (id, name, is_active, created_at) VALUES (?,?,?,?)",
+            (side_id, name.strip(), 1, now),
         )
         row = db.execute("SELECT * FROM sides WHERE id=?", (side_id,)).fetchone()
         return _boolify_side(dict(row))
@@ -494,14 +495,11 @@ def create_side(name: str, category: str = "") -> dict[str, Any]:
 def update_side(
     side_id: str,
     name: str | None = None,
-    category: str | None = None,
     is_active: bool | None = None,
 ) -> dict[str, Any]:
     with connect() as db:
         if name is not None:
             db.execute("UPDATE sides SET name=? WHERE id=?", (name.strip(), side_id))
-        if category is not None:
-            db.execute("UPDATE sides SET category=? WHERE id=?", (category.strip(), side_id))
         if is_active is not None:
             db.execute("UPDATE sides SET is_active=? WHERE id=?", (int(is_active), side_id))
         row = db.execute("SELECT * FROM sides WHERE id=?", (side_id,)).fetchone()
@@ -520,7 +518,7 @@ def side_usage_stats() -> list[dict[str, Any]]:
     fois utilisé et date de dernière consommation (toutes périodes confondues)."""
     with connect() as db:
         rows = db.execute(
-            """SELECT s.id, s.name, s.category, s.is_active, s.created_at,
+            """SELECT s.id, s.name, s.is_active, s.created_at,
                       COUNT(ss.id) as total_count,
                       MAX(ms.slot_date) as last_used
                FROM sides s
@@ -609,7 +607,7 @@ def delete_family_member(member_id: str) -> None:
 def _get_sides_for_slot(db: sqlite3.Connection, slot_id: str) -> list[dict[str, Any]]:
     rows = db.execute(
         """SELECT ss.id, ss.side_id, ss.free_text, ss.sort_order,
-                  s.name as side_name, s.category as side_category
+                  s.name as side_name
            FROM meal_slot_sides ss
            LEFT JOIN sides s ON s.id = ss.side_id
            WHERE ss.slot_id = ?
@@ -623,7 +621,6 @@ def _get_sides_for_slot(db: sqlite3.Connection, slot_id: str) -> list[dict[str, 
             "side_id": r["side_id"],
             "name": r["side_name"] if r["side_id"] else r["free_text"],
             "free_text": r["free_text"],
-            "category": r["side_category"] or "",
             "sort_order": r["sort_order"],
         })
     return result
@@ -1013,7 +1010,6 @@ def side_frequency(weeks: int = 12) -> list[dict[str, Any]]:
     with connect() as db:
         rows = db.execute(
             """SELECT COALESCE(sd.name, ss.free_text) as name, ss.side_id as side_id,
-                      COALESCE(sd.category, '') as category,
                       COUNT(*) as count
                FROM meal_slot_sides ss
                JOIN meal_slots ms ON ms.id = ss.slot_id

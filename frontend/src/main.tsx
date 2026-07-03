@@ -73,7 +73,6 @@ interface SlotSide {
   side_id?: string;
   name: string;
   free_text: string;
-  category: string;
   sort_order: number;
 }
 
@@ -124,7 +123,6 @@ interface Recipe {
 interface Side {
   id: string;
   name: string;
-  category: string;
 }
 
 interface SideStat extends Side {
@@ -138,7 +136,6 @@ interface SideStat extends Side {
 interface FavoriteSide {
   name: string;
   side_id?: string;
-  category: string;
 }
 
 interface CanonicalTag {
@@ -889,7 +886,6 @@ function SidesEditor({ sides, onChange }: { sides: SlotSide[]; onChange: (s: Slo
       side_id: sideId,
       name,
       free_text: sideId ? "" : name,
-      category: libSides.find((s) => s.id === sideId)?.category ?? "",
       sort_order: sides.length,
     }]);
     setInput("");
@@ -1445,7 +1441,6 @@ function SidesScreen() {
   const [q, setQ] = useState("");
   const [filters, setFilters] = useState<Set<string>>(new Set());
   const [newName, setNewName] = useState("");
-  const [newCat, setNewCat] = useState("");
 
   function load() {
     setLoading(true);
@@ -1474,10 +1469,9 @@ function SidesScreen() {
     if (!newName.trim()) return;
     await api<Side>("/api/sides", {
       method: "POST",
-      body: JSON.stringify({ name: newName.trim(), category: newCat.trim() }),
+      body: JSON.stringify({ name: newName.trim() }),
     });
     setNewName("");
-    setNewCat("");
     load();
   }
 
@@ -1544,7 +1538,6 @@ function SidesScreen() {
                 />
                 <div className="side-stat-meta">
                   {s.is_favorite && <span className="badge badge-lunch">Favori</span>}
-                  {s.category && <span className="recipe-last">{s.category}</span>}
                   <span className="recipe-last">
                     {s.last_used ? `Dernière fois : ${weeksAgo(s.last_used)}` : "Jamais utilisé"}
                   </span>
@@ -1564,11 +1557,6 @@ function SidesScreen() {
           onChange={(e) => setNewName(e.target.value)}
           placeholder="Nouvel accompagnement…"
           onKeyDown={(e) => e.key === "Enter" && addSide()}
-        />
-        <input
-          value={newCat}
-          onChange={(e) => setNewCat(e.target.value)}
-          placeholder="Catégorie (optionnel)"
         />
         <button onClick={addSide}><Plus size={14} /></button>
       </div>
