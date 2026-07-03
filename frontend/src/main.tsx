@@ -1860,6 +1860,7 @@ function RecipeDetailModal({
   const [isWeekend, setIsWeekend] = useState(recipe.is_weekend);
   const [makesLunch, setMakesLunch] = useState(recipe.makes_lunch);
   const [isHidden, setIsHidden] = useState(recipe.is_hidden);
+  const [notes, setNotes] = useState(recipe.notes ?? "");
   const [tagIds, setTagIds] = useState<string[]>(recipe.tag_ids ?? []);
   const [allTags, setAllTags] = useState<CanonicalTag[]>([]);
   const [likedBy, setLikedBy] = useState<string[]>(recipe.liked_by ?? []);
@@ -1869,12 +1870,16 @@ function RecipeDetailModal({
   useEffect(() => {
     if (recipe.source !== "local") return;
     api<CanonicalTag[]>("/api/tags")
-      .then((t) => setAllTags([...t].sort((a, b) => a.name.localeCompare(b.name))))
+      .then((t) => setAllTags([...t].filter((tag) => !tag.is_filter).sort((a, b) => a.name.localeCompare(b.name))))
       .catch(() => notify("Impossible de charger les tags."));
   }, [recipe.source]);
 
   function toggleLikedBy(childId: string) {
     setLikedBy((prev) => prev.includes(childId) ? prev.filter((c) => c !== childId) : [...prev, childId]);
+  }
+
+  function toggleTag(tagId: string) {
+    setTagIds((prev) => prev.includes(tagId) ? prev.filter((id) => id !== tagId) : [...prev, tagId]);
   }
 
   async function save() {
@@ -1884,10 +1889,10 @@ function RecipeDetailModal({
         await api(`/api/recipes/mealie/${recipe.slug}/meta`, {
           method: "PATCH",
           body: JSON.stringify({
-            is_weekend: isWeekend, makes_lunch: makesLunch, is_hidden: isHidden, liked_by: likedBy,
+            is_weekend: isWeekend, makes_lunch: makesLunch, is_hidden: isHidden, notes, liked_by: likedBy,
           }),
         });
-        onUpdated({ ...recipe, is_weekend: isWeekend, makes_lunch: makesLunch, is_hidden: isHidden, liked_by: likedBy });
+        onUpdated({ ...recipe, is_weekend: isWeekend, makes_lunch: makesLunch, is_hidden: isHidden, notes, liked_by: likedBy });
       } else if (recipe.source === "local" && recipe.id) {
         const updated = await api<Recipe>(`/api/local-recipes/${recipe.id}`, {
           method: "PATCH",
@@ -1897,6 +1902,7 @@ function RecipeDetailModal({
             is_weekend: isWeekend,
             makes_lunch: makesLunch,
             tag_ids: tagIds,
+            notes,
             liked_by: likedBy,
           }),
         });
@@ -1916,37 +1922,137 @@ function RecipeDetailModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: "flex", alignItems: "center", marginBottom: 12 }}>
-          <span className="modal-title" style={{ flex: 1 }}>{recipe.source === "local" ? name : recipe.name}</span>
+      <div className="modal recipe-detail-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="recipe-detail-header">
+          <div className="recipe-detail-title-block">
+            <span className={`source-badge ${recipe.source}`}>
+              {recipe.source === "mealie" ? "Mealie" : "Locale"}
+            </span>
+            <h2>{recipe.source === "local" ? name : recipe.name}</h2>
+            <div className="recipe-detail-meta">
+              {(recipe.source === "local" ? prep : recipe.prep_minutes) && (
+                <span className="badge badge-ago">{recipe.source === "local" ? prep : recipe.prep_minutes} min</span>
+              )}
+              {recipe.last_used && <span className="badge badge-ago">{weeksAgo(recipe.last_used)}</span>}
+              {recipe.total_count ? <span className="badge badge-ago">{recipe.total_count}x</span> : null}
+              {recipe.inventory_score?.score !== null && recipe.inventory_score?.score !== undefined && (
+                <span className={`badge ${scoreClass(recipe.inventory_score.score)}`}>
+                  {Math.round(recipe.inventory_score.score * 100)}% dispo
+                </span>
+              )}
+            </div>
+          </div>
           <button className="btn-icon" onClick={onClose}><X size={18} /></button>
         </div>
-        <div style={{ marginBottom: 12 }}>
-          <span className={`source-badge ${recipe.source}`}>
-            {recipe.source === "mealie" ? "Mealie" : "Recette locale"}
-          </span>
-          {recipe.prep_minutes && (
-            <span className="recipe-last" style={{ marginLeft: 8 }}>{recipe.prep_minutes} min</span>
-          )}
-        </div>
+
         {recipe.inventory_score?.score !== null && recipe.inventory_score?.score !== undefined && (
-          <div style={{ marginBottom: 12 }}>
-            <span className={`badge ${scoreClass(recipe.inventory_score.score)}`}>
-              {Math.round(recipe.inventory_score.score * 100)}% des ingrédients disponibles
-            </span>
-            {recipe.inventory_score.missing.length > 0 && (
-              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
-                Manquants : {recipe.inventory_score.missing.join(", ")}
-              </div>
+          <section className="recipe-detail-section">
+            <div className="section-label">Inventaire</div>
+            {recipe.inventory_score.missing.length > 0 ? (
+              <>
+                <div className="recipe-last" style={{ marginBottom: 6 }}>Ingrédients manquants</div>
+                <div className="detail-chip-row">
+                  {recipe.inventory_score.missing.map((item) => (
+                    <span key={item} className="detail-chip missing">{item}</span>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <div className="recipe-last">Tous les ingrédients détectés sont disponibles.</div>
             )}
-          </div>
+          </section>
         )}
-        {recipe.source === "mealie" && recipe.tags.length > 0 && (
-          <div style={{ marginBottom: 12 }}>
-            <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "var(--muted)", marginBottom: 4 }}>
-              Tags canoniques (via Paramètres → Tags Mealie → Tags canoniques)
-            </label>
-            <div className="day-badges" style={{ flexWrap: "wrap" }}>
+
+        {canEdit && recipe.source === "local" && (
+          <section className="recipe-detail-section">
+            <div className="section-label">Informations</div>
+            <div className="detail-form-grid">
+              <div className="form-row">
+                <label>Nom</label>
+                <input value={name} onChange={(e) => setName(e.target.value)} />
+              </div>
+              <div className="form-row">
+                <label>Préparation (min)</label>
+                <input type="number" value={prep} onChange={(e) => setPrep(e.target.value)} min="0" />
+              </div>
+            </div>
+          </section>
+        )}
+
+        {canEdit && (
+          <section className="recipe-detail-section">
+            <div className="section-label">Préférences</div>
+            <div className="detail-chip-row">
+              <button
+                type="button"
+                className={`toggle-chip${isWeekend ? " active" : ""}`}
+                onClick={() => setIsWeekend((v) => !v)}
+              >
+                Week-end
+              </button>
+              <button
+                type="button"
+                className={`toggle-chip${makesLunch ? " active" : ""}`}
+                onClick={() => setMakesLunch((v) => !v)}
+              >
+                Lunchs
+              </button>
+              {recipe.source === "mealie" && (
+                <button
+                  type="button"
+                  className={`toggle-chip danger${isHidden ? " active" : ""}`}
+                  onClick={() => setIsHidden((v) => !v)}
+                >
+                  Masquée
+                </button>
+              )}
+            </div>
+            {allChildren.length > 0 && (
+              <>
+                <div className="recipe-last" style={{ margin: "12px 0 6px" }}>Aimé par</div>
+                <div className="detail-chip-row">
+                  {allChildren.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      className={`person-chip${likedBy.includes(c.id) ? " active" : ""}`}
+                      style={likedBy.includes(c.id) ? presenceTagStyle(c) : undefined}
+                      onClick={() => toggleLikedBy(c.id)}
+                    >
+                      {c.name}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </section>
+        )}
+
+        <section className="recipe-detail-section">
+          <div className="section-label">Tags</div>
+          {recipe.source === "local" && canEdit ? (
+            allTags.length > 0 ? (
+              <div className="detail-chip-row">
+                {allTags.map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    className={`tag-choice${tagIds.includes(t.id) ? " active" : ""}`}
+                    style={tagIds.includes(t.id) ? {
+                      background: t.color || DEFAULT_TAG_COLOR,
+                      color: readableTextColor(t.color || DEFAULT_TAG_COLOR),
+                    } : undefined}
+                    onClick={() => toggleTag(t.id)}
+                  >
+                    {t.name}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="recipe-last">Aucun tag configuré.</div>
+            )
+          ) : recipe.tags.length > 0 ? (
+            <div className="detail-chip-row">
               {recipe.tags.map((t) => (
                 <span
                   key={t.id}
@@ -1957,105 +2063,40 @@ function RecipeDetailModal({
                 </span>
               ))}
             </div>
-          </div>
-        )}
+          ) : (
+            <div className="recipe-last">Aucun tag.</div>
+          )}
+        </section>
+
         {canEdit && (
-          <>
+          <section className="recipe-detail-section">
+            <div className="section-label">Notes</div>
+            <textarea
+              className="detail-notes"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={3}
+              placeholder="Notes familiales, ajustements, variantes..."
+            />
+          </section>
+        )}
+
+        {canEdit && (
+          <div className="modal-sticky-actions">
             {recipe.source === "local" && (
-              <div className="form-row">
-                <label>Nom</label>
-                <input value={name} onChange={(e) => setName(e.target.value)} />
-              </div>
-            )}
-            {recipe.source === "local" && (
-              <div className="form-row">
-                <label>Temps de préparation (min)</label>
-                <input type="number" value={prep} onChange={(e) => setPrep(e.target.value)} min="0" />
-              </div>
-            )}
-            <div className="form-row">
-              <label>
-                <input
-                  type="checkbox"
-                  checked={isWeekend}
-                  onChange={(e) => setIsWeekend(e.target.checked)}
-                  style={{ marginRight: 6 }}
-                />
-                Repas week-end
-              </label>
-            </div>
-            <div className="form-row">
-              <label>
-                <input
-                  type="checkbox"
-                  checked={makesLunch}
-                  onChange={(e) => setMakesLunch(e.target.checked)}
-                  style={{ marginRight: 6 }}
-                />
-                Fait des lunchs le lendemain
-              </label>
-            </div>
-            {recipe.source === "local" && (
-              <div className="form-row">
-                <label>Tags</label>
-                <select
-                  multiple
-                  value={tagIds}
-                  onChange={(e) => setTagIds(Array.from(e.target.selectedOptions, (o) => o.value))}
-                  size={Math.min(6, Math.max(3, allTags.length || 1))}
-                >
-                  {allTags.map((t) => (
-                    <option key={t.id} value={t.id}>{t.name}</option>
-                  ))}
-                </select>
-              </div>
-            )}
-            {allChildren.length > 0 && (
-              <div className="form-row">
-                <label>Aimé par</label>
-                <div className="filter-chips">
-                  {allChildren.map((c) => (
-                    <button
-                      key={c.id}
-                      type="button"
-                      className={`filter-chip${likedBy.includes(c.id) ? " active" : ""}`}
-                      onClick={() => toggleLikedBy(c.id)}
-                    >
-                      {c.name}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-            {recipe.source === "mealie" && (
-              <div className="form-row">
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={isHidden}
-                    onChange={(e) => setIsHidden(e.target.checked)}
-                    style={{ marginRight: 6 }}
-                  />
-                  Masquer cette recette (n'apparaît plus dans l'onglet Recettes ni le choix de repas)
-                </label>
-              </div>
-            )}
-            <div className="form-actions">
-              {recipe.source === "local" && (
-                <button className="btn btn-danger" onClick={handleDelete}>
-                  <Trash2 size={14} /> Supprimer
-                </button>
-              )}
-              <button className="btn btn-secondary" onClick={onClose}>Annuler</button>
-              <button
-                className="btn btn-primary"
-                onClick={save}
-                disabled={saving || (recipe.source === "local" && !name.trim())}
-              >
-                {saving ? "…" : "Enregistrer"}
+              <button className="btn btn-ghost btn-danger-ghost" onClick={handleDelete}>
+                <Trash2 size={14} /> Supprimer
               </button>
-            </div>
-          </>
+            )}
+            <button className="btn btn-secondary" onClick={onClose}>Annuler</button>
+            <button
+              className="btn btn-primary"
+              onClick={save}
+              disabled={saving || (recipe.source === "local" && !name.trim())}
+            >
+              {saving ? "..." : "Enregistrer"}
+            </button>
+          </div>
         )}
       </div>
     </div>
