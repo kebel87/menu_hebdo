@@ -75,6 +75,13 @@ def _apply_migrations(db: sqlite3.Connection) -> None:
     side_cols = {row[1] for row in db.execute("PRAGMA table_info(sides)").fetchall()}
     if "is_active" not in side_cols:
         db.execute("ALTER TABLE sides ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS child_colors (
+            child_id TEXT PRIMARY KEY,
+            color TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL
+        )
+    """)
 
 
 def _backfill_weekend_lunch_tags(db: sqlite3.Connection) -> None:
@@ -180,6 +187,12 @@ def _create_tables(db: sqlite3.Connection) -> None:
             status TEXT NOT NULL DEFAULT 'pending',
             confirmed_at TEXT NOT NULL DEFAULT '',
             confirmed_by TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE TABLE IF NOT EXISTS child_colors (
+            child_id TEXT PRIMARY KEY,
+            color TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS push_subscriptions (
@@ -495,6 +508,28 @@ def side_usage_stats() -> list[dict[str, Any]]:
                ORDER BY s.name"""
         ).fetchall()
         return [_boolify_side(dict(r)) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# child_colors (couleur des tags de présence par enfant, enfants gérés par
+# calendrier_familiale — menu_hebdo ne connaît que leur id/couleur locale)
+# ---------------------------------------------------------------------------
+
+def list_child_colors() -> dict[str, str]:
+    with connect() as db:
+        rows = db.execute("SELECT child_id, color FROM child_colors").fetchall()
+        return {r["child_id"]: r["color"] for r in rows}
+
+
+def set_child_color(child_id: str, color: str) -> dict[str, Any]:
+    with connect() as db:
+        now = now_iso()
+        db.execute(
+            """INSERT INTO child_colors (child_id, color, updated_at) VALUES (?,?,?)
+               ON CONFLICT(child_id) DO UPDATE SET color=excluded.color, updated_at=excluded.updated_at""",
+            (child_id, color.strip(), now),
+        )
+        return {"child_id": child_id, "color": color.strip()}
 
 
 def _get_sides_for_slot(db: sqlite3.Connection, slot_id: str) -> list[dict[str, Any]]:

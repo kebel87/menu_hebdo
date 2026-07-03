@@ -24,6 +24,7 @@ from menu_app.store import (
     get_slot,
     import_mealie_tags,
     list_canonical_tags,
+    list_child_colors,
     list_local_recipes,
     list_plans,
     list_sides,
@@ -33,6 +34,7 @@ from menu_app.store import (
     move_slot,
     recipe_frequency,
     recipe_usage_stats,
+    set_child_color,
     side_frequency,
     side_usage_stats,
     update_canonical_tag,
@@ -191,8 +193,22 @@ def get_week(
 
 @app.get("/api/children")
 def api_children(actor: Actor = Depends(require_permission("menu.read"))) -> list[dict[str, Any]]:
-    """Liste des enfants (id, name, short_label), source: calendrier_familiale."""
-    return calendar_client.get_children()
+    """Liste des enfants (id, name, short_label, color) : identité depuis
+    calendrier_familiale, couleur du tag de présence gérée localement."""
+    children = calendar_client.get_children()
+    colors = list_child_colors()
+    for c in children:
+        c["color"] = colors.get(c["id"], "")
+    return children
+
+
+@app.patch("/api/children/{child_id}")
+def api_update_child_color(
+    child_id: str,
+    body: dict = Body(...),
+    actor: Actor = Depends(require_permission("settings.manage")),
+) -> dict:
+    return set_child_color(child_id, body.get("color", ""))
 
 
 @app.get("/api/month/{year}/{month}")

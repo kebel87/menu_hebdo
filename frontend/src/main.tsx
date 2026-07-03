@@ -87,6 +87,7 @@ interface Child {
   id: string;
   name: string;
   short_label: string;
+  color: string;
 }
 
 interface DayPresence {
@@ -328,6 +329,11 @@ function DroppableCard({
   );
 }
 
+function presenceTagStyle(child?: Child): React.CSSProperties {
+  const bg = child?.color || DEFAULT_TAG_COLOR;
+  return { background: bg, color: readableTextColor(bg) };
+}
+
 function PresenceBadge({
   dayPresence,
   allChildren,
@@ -344,7 +350,7 @@ function PresenceBadge({
       {dayPresence.presentChildren.map((childId) => {
         const child = allChildren.find((c) => c.id === childId);
         return (
-          <span key={childId} className="presence-tag" title={child?.name ?? childId}>
+          <span key={childId} className="presence-tag" style={presenceTagStyle(child)} title={child?.name ?? childId}>
             {child?.short_label ?? childId[0]?.toUpperCase()}
           </span>
         );
@@ -1365,7 +1371,7 @@ function RecipesScreen({ canEdit }: { canEdit: boolean }) {
                       {r.liked_by.map((childId) => {
                         const child = children.find((c) => c.id === childId);
                         return (
-                          <span key={childId} className="presence-tag" title={child?.name ?? childId}>
+                          <span key={childId} className="presence-tag" style={presenceTagStyle(child)} title={child?.name ?? childId}>
                             {child?.short_label ?? childId[0]?.toUpperCase()}
                           </span>
                         );
@@ -2035,6 +2041,7 @@ function SettingsScreen({ canAdmin }: { canAdmin: boolean }) {
     <div className="screen-pad">
       {canAdmin && <TagMappingsSection />}
       {canAdmin && <CanonicalTagsSection />}
+      {canAdmin && <ChildColorsSection />}
       <NotificationsSection />
     </div>
   );
@@ -2224,6 +2231,41 @@ function CanonicalTagsSection() {
           onKeyDown={(e) => e.key === "Enter" && addTag()}
         />
         <button onClick={addTag}><Plus size={14} /></button>
+      </div>
+    </div>
+  );
+}
+
+function ChildColorsSection() {
+  const [children, setChildren] = useState<Child[]>([]);
+
+  useEffect(() => {
+    api<Child[]>("/api/children").then(setChildren).catch(() => {});
+  }, []);
+
+  async function recolor(id: string, color: string) {
+    await api(`/api/children/${id}`, { method: "PATCH", body: JSON.stringify({ color }) });
+    setChildren((prev) => prev.map((c) => (c.id === id ? { ...c, color } : c)));
+  }
+
+  if (children.length === 0) return null;
+
+  return (
+    <div className="settings-section">
+      <h2>Couleurs de présence</h2>
+      <div className="canonical-tags-list">
+        {children.map((c) => (
+          <div key={c.id} className="canonical-tag-row">
+            <input
+              type="color"
+              value={c.color || DEFAULT_TAG_COLOR}
+              onChange={(e) => recolor(c.id, e.target.value)}
+              title="Couleur du tag de présence dans Semaine et Repas"
+              className="tag-color-input"
+            />
+            <span style={{ flex: 1, fontSize: 14 }}>{c.name} ({c.short_label})</span>
+          </div>
+        ))}
       </div>
     </div>
   );

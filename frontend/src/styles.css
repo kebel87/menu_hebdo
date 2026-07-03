@@ -266,6 +266,7 @@ body {
   color: var(--ink);
   box-shadow: 0 0 0 1px rgba(0,0,0,.06);
 }
+.presence-tag-all { background: var(--green); color: #fff; box-shadow: none; }
 /* Teinte pastel par jour de semaine (Lun → Dim) */
 .day-card-header.dow-0 { background: hsl(205, 60%, 87%); }
 .day-card-header.dow-1 { background: hsl(178, 55%, 84%); }
