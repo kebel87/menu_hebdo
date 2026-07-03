@@ -14,6 +14,7 @@ import { useDraggable, useDroppable } from "@dnd-kit/core";
 import {
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   CalendarDays,
   UtensilsCrossed,
   BarChart2,
@@ -303,6 +304,10 @@ function fmtWeekLabel(monday: Date): string {
 function fmtDateFull(iso: string): string {
   const d = new Date(iso + "T00:00:00");
   return `${DAYS_FULL[d.getDay() === 0 ? 6 : d.getDay() - 1]} ${d.getDate()} ${MONTHS_FR[d.getMonth()]} ${d.getFullYear()}`;
+}
+
+function searchKey(value: string): string {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 }
 
 function weeksAgo(iso: string): string {
@@ -1013,7 +1018,7 @@ function SidesEditor({ sides, onChange }: { sides: SlotSide[]; onChange: (s: Slo
   }, []);
 
   const suggestions = input.length > 0
-    ? libSides.filter((s) => s.name.toLowerCase().includes(input.toLowerCase()))
+    ? libSides.filter((s) => searchKey(s.name).includes(searchKey(input)))
     : libSides.slice(0, 8);
   const exactMatch = suggestions.some((s) => s.name.toLowerCase() === input.trim().toLowerCase());
   const chosenNames = new Set(sides.map((s) => s.name.toLowerCase()));
@@ -1183,6 +1188,7 @@ function MealWizard({
   const [filters, setFilters] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [mealListOpen, setMealListOpen] = useState(false);
+  const [showAllMeals, setShowAllMeals] = useState(false);
   const filterTags = useFilterableTags();
 
   useEffect(() => {
@@ -1199,6 +1205,7 @@ function MealWizard({
 
   function toggleFilter(f: string) {
     setMealListOpen(true);
+    setShowAllMeals(false);
     setFilters((prev) => {
       const n = new Set(prev);
       n.has(f) ? n.delete(f) : n.add(f);
@@ -1207,7 +1214,7 @@ function MealWizard({
   }
 
   const filtered = recipes.filter((r) => {
-    if (q && !r.name.toLowerCase().includes(q.toLowerCase())) return false;
+    if (q && !searchKey(r.name).includes(searchKey(q))) return false;
     if (filters.has("rapide") && (!r.prep_minutes || r.prep_minutes > 30)) return false;
     if (filters.has("dispo") && (r.inventory_score?.score ?? 0) < 0.8) return false;
     for (const t of filterTags) {
@@ -1217,21 +1224,11 @@ function MealWizard({
   });
 
   const isIdle = !q && filters.size === 0;
-  const showingFavorites = isIdle && favorites.length > 0;
-  const favoriteKeys = new Set(
-    favorites.map((r) => (r.source === "mealie" ? `mealie-${r.slug}` : `local-${r.id}`))
-  );
-  const mealSections: { label: string | null; items: Recipe[] }[] = isIdle
-    ? showingFavorites
-      ? [
-          { label: "Favoris", items: favorites },
-          { label: "Toutes les recettes", items: recipes.filter((r) => !favoriteKeys.has(r.source === "mealie" ? `mealie-${r.slug}` : `local-${r.id}`)) },
-        ]
-      : [{ label: null, items: recipes }]
-    : [{ label: null, items: filtered }];
+  const mealResults = showAllMeals ? recipes : filtered;
 
   function pickMeal(r: Recipe) {
     setMealListOpen(false);
+    setShowAllMeals(false);
     setChosenRecipe(r);
     if (mode === "meal") {
       // Le repas seul change : on garde l'accompagnement existant, étape sides sautée.
@@ -1285,6 +1282,7 @@ function MealWizard({
     setChosenRecipe(null);
     setChosenSides([]);
     setMealListOpen(false);
+    setShowAllMeals(false);
   }
 
   function continueAfterContext() {
@@ -1366,15 +1364,63 @@ function MealWizard({
 
             {needsRecipe && (
               <>
-                <div className="search-bar">
-                  <Search size={16} style={{ alignSelf: "center", color: "var(--muted)" }} />
-                  <input
-                    value={q}
-                    onChange={(e) => { setQ(e.target.value); setMealListOpen(true); }}
-                    onFocus={() => setMealListOpen(true)}
-                    onBlur={() => setTimeout(() => setMealListOpen(false), 150)}
-                    placeholder="Rechercher une recette…"
-                  />
+                <div className="meal-search-combo">
+                  <div className="meal-search-row">
+                    <Search size={16} style={{ color: "var(--muted)", flexShrink: 0 }} />
+                    <input
+                      value={q}
+                      onChange={(e) => { setQ(e.target.value); setMealListOpen(true); setShowAllMeals(false); }}
+                      onFocus={() => { if (q || filters.size > 0) setMealListOpen(true); }}
+                      onBlur={() => setTimeout(() => setMealListOpen(false), 150)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && mealResults.length > 0) pickMeal(mealResults[0]);
+                      }}
+                      placeholder="Rechercher une recette…"
+                    />
+                    <button
+                      type="button"
+                      className={`meal-dropdown-btn${mealListOpen && showAllMeals ? " active" : ""}`}
+                      aria-label="Afficher toutes les recettes"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        setShowAllMeals(true);
+                        setMealListOpen((open) => !(open && showAllMeals));
+                      }}
+                    >
+                      <ChevronDown size={18} />
+                    </button>
+                  </div>
+                  {mealListOpen && (
+                    loading ? (
+                      <div className="meal-dropdown-panel">
+                        <div className="empty-state"><RefreshCw size={24} className="spin" /></div>
+                      </div>
+                    ) : (
+                      <div className="meal-dropdown-panel">
+                        {mealResults.length === 0 && (
+                          <div className="empty-state"><p>Aucune recette trouvée</p></div>
+                        )}
+                        {mealResults.map((r) => {
+                          const key = r.source === "mealie" ? `mealie-${r.slug}` : `local-${r.id}`;
+                          return (
+                            <button key={key} type="button" className="meal-option" onMouseDown={() => pickMeal(r)}>
+                              <span className="meal-option-name">{r.name}</span>
+                              <span className="recipe-card-meta">
+                                {r.makes_lunch && <span className="badge badge-lunch">Lunch</span>}
+                                {r.is_weekend && <span className="badge badge-weekend">Weekend</span>}
+                                {r.prep_minutes && <span className="recipe-last">{r.prep_minutes} min</span>}
+                                {r.inventory_score?.score !== null && r.inventory_score?.score !== undefined && (
+                                  <span className={`badge ${scoreClass(r.inventory_score.score)}`}>
+                                    {Math.round(r.inventory_score.score * 100)}%
+                                  </span>
+                                )}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )
+                  )}
                 </div>
                 <div className="filter-chips">
                   {["dispo", "rapide"].map((f) => (
@@ -1393,48 +1439,28 @@ function MealWizard({
                   onClick={() => toggleFilter(t.id)}
                 >
                   {t.name}
-                </button>
+                    </button>
                   ))}
                 </div>
-                {mealListOpen && (
-              loading ? (
-                <div className="empty-state"><RefreshCw size={24} className="spin" /></div>
-              ) : (
-                <div className="recipe-list">
-                  {mealSections.every((s) => s.items.length === 0) && (
-                    <div className="empty-state"><p>Aucune recette trouvée</p></div>
-                  )}
-                  {mealSections.map((section, si) => (
-                    section.items.length === 0 ? null : (
-                      <div key={section.label ?? si} className="recipe-list-group">
-                        {section.label && <div className="favorites-label">{section.label}</div>}
-                        {section.items.map((r) => {
-                          const key = r.source === "mealie" ? `mealie-${r.slug}` : `local-${r.id}`;
-                          return (
-                            <div key={key} className="recipe-card" onClick={() => pickMeal(r)}>
-                              <div className="recipe-card-header">
-                                <span className="recipe-card-name">{r.name}</span>
-                              </div>
-                              <div className="recipe-card-meta">
-                                {r.makes_lunch && <span className="badge badge-lunch">Lunch</span>}
-                                {r.is_weekend && <span className="badge badge-weekend">Weekend</span>}
-                                {r.prep_minutes && (
-                                  <span className="recipe-last">{r.prep_minutes} min</span>
-                                )}
-                                {r.inventory_score?.score !== null && r.inventory_score?.score !== undefined && (
-                                  <span className={`badge ${scoreClass(r.inventory_score.score)}`}>
-                                    {Math.round(r.inventory_score.score * 100)}%
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )
-                  ))}
-                </div>
-              )
+                {isIdle && favorites.length > 0 && !mealListOpen && (
+                  <div className="favorites-row">
+                    <div className="favorites-label">Favoris</div>
+                    <div className="meal-favorites-grid">
+                      {favorites.map((r) => {
+                        const key = r.source === "mealie" ? `mealie-${r.slug}` : `local-${r.id}`;
+                        return (
+                          <button key={key} type="button" className="meal-favorite-card" onClick={() => pickMeal(r)}>
+                            <span className="meal-option-name">{r.name}</span>
+                            <span className="recipe-card-meta">
+                              {r.makes_lunch && <span className="badge badge-lunch">Lunch</span>}
+                              {r.is_weekend && <span className="badge badge-weekend">Weekend</span>}
+                              {r.prep_minutes && <span className="recipe-last">{r.prep_minutes} min</span>}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
                 )}
               </>
             )}
@@ -1527,7 +1553,7 @@ function RecipesScreen({ canEdit }: { canEdit: boolean }) {
   const showHidden = filters.has("masquees");
   const filtered = recipes.filter((r) => {
     if (r.is_hidden !== showHidden) return false;
-    if (q && !r.name.toLowerCase().includes(q.toLowerCase())) return false;
+    if (q && !searchKey(r.name).includes(searchKey(q))) return false;
     if (filters.has("rapide") && (!r.prep_minutes || r.prep_minutes > 30)) return false;
     if (filters.has("dispo") && (r.inventory_score?.score ?? 0) < 0.8) return false;
     for (const t of filterTags) {
@@ -1736,7 +1762,7 @@ function SidesScreen() {
   const showInactive = filters.has("inactifs");
   const filtered = sides.filter((s) => {
     if (s.is_active === showInactive) return false;
-    if (q && !s.name.toLowerCase().includes(q.toLowerCase())) return false;
+    if (q && !searchKey(s.name).includes(searchKey(q))) return false;
     if (filters.has("favoris") && !s.is_favorite) return false;
     return true;
   });

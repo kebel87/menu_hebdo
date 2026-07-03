@@ -508,6 +508,111 @@ body {
   color: var(--muted);
   margin: 8px 0 6px;
 }
+.meal-search-combo {
+  position: relative;
+  margin-bottom: 10px;
+}
+.meal-search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  padding: 7px 8px 7px 10px;
+}
+.meal-search-row:focus-within {
+  border-color: var(--green);
+}
+.meal-search-row input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 16px;
+}
+.meal-dropdown-btn {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--muted);
+  cursor: pointer;
+}
+.meal-dropdown-btn.active,
+.meal-dropdown-btn:hover {
+  border-color: var(--green);
+  color: var(--green);
+  background: var(--green-soft);
+}
+.meal-dropdown-panel {
+  margin-top: 4px;
+  max-height: min(320px, 48dvh);
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  padding: 4px;
+}
+@media (min-width: 600px) {
+  .meal-dropdown-panel {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    z-index: 20;
+    margin-top: 0;
+  }
+}
+.meal-option,
+.meal-favorite-card {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--ink);
+  cursor: pointer;
+}
+.meal-option {
+  border-color: transparent;
+  padding: 8px 9px;
+}
+.meal-option:hover,
+.meal-favorite-card:hover {
+  border-color: var(--green);
+  background: var(--green-soft);
+}
+.meal-option-name {
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+.meal-favorites-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.meal-favorite-card {
+  min-height: 70px;
+  padding: 9px 10px;
+}
+@media (max-width: 359px) {
+  .meal-favorites-grid { grid-template-columns: minmax(0, 1fr); }
+}
 
 /* ── Recipe picker / écran Recettes ── */
 .screen-pad { padding: 12px; }
