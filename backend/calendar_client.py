@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 import os
 import time
 from typing import Any
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 _CALENDAR_URL = os.getenv("CALENDAR_API_URL", "https://calendrier.kb87.net")
 _CALENDAR_API_TOKEN = os.getenv("CALENDAR_API_TOKEN", "")
@@ -37,7 +40,7 @@ def get_children() -> list[dict[str, Any]]:
         _children_cache = resp.json().get("children", [])
         _children_cache_at = time.time()
     except Exception:
-        pass
+        logger.warning("calendrier_familiale: échec de récupération des enfants", exc_info=True)
     return _children_cache
 
 
@@ -57,4 +60,5 @@ def get_presence(iso_date: str) -> dict[str, Any] | None:
         _presence_cache[iso_date] = (time.time(), data)
         return data
     except Exception:
+        logger.warning("calendrier_familiale: échec de récupération de la présence pour %s", iso_date, exc_info=True)
         return None

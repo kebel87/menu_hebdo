@@ -758,3 +758,27 @@ body {
      (swipe-up pour changer d'app), sinon un drag y démarre trop près du bord. */
   padding-bottom: max(10px, env(safe-area-inset-bottom));
 }
+
+/* ── Toasts ── */
+.toast-container {
+  position: fixed;
+  left: 50%;
+  bottom: max(16px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(360px, calc(100vw - 32px));
+}
+.toast {
+  background: var(--panel);
+  color: var(--ink);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  padding: 10px 14px;
+  font-size: 13px;
+  border-left: 3px solid var(--red);
+  cursor: pointer;
+}
+.toast-info { border-left-color: var(--green); }

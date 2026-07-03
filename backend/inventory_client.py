@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 import os
 import time
 from typing import Any
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 _INVENTAIRE_URL = os.getenv("INVENTAIRE_API_URL", "")
 _SERVICE_KEY = os.getenv("SERVICE_API_KEY", "")
@@ -41,7 +44,7 @@ def get_inventory(force: bool = False) -> list[dict[str, Any]]:
         _cache = items
         _cache_at = time.time()
     except Exception:
-        pass
+        logger.warning("inventaire_familial: échec de récupération de l'inventaire", exc_info=True)
     return _cache
 
 

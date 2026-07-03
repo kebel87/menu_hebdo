@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from datetime import date, timedelta
 from typing import Any
@@ -8,6 +9,9 @@ from fastapi import Body, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger(__name__)
 
 from menu_app.store import (
     clear_slot,
@@ -53,6 +57,7 @@ from menu_app.store import (
     upsert_tag_mapping,
     initialize_database,
 )
+from .access_control import ACCESS_CONTROL_PATH
 from .auth import Actor, current_actor, require_permission
 from .mealie_client import get_recipes, get_recipe, get_mealie_tags, is_configured as mealie_ok
 from .inventory_client import get_inventory, inventory_score, is_configured as inv_ok
@@ -78,6 +83,12 @@ _FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist
 
 @app.on_event("startup")
 def startup() -> None:
+    if not ACCESS_CONTROL_PATH.exists():
+        logger.error(
+            "Fichier de configuration manquant : %s — montez le volume de données "
+            "(ex. ./data:/app/data) avant de démarrer, sinon toutes les requêtes échoueront.",
+            ACCESS_CONTROL_PATH,
+        )
     initialize_database()
     start_notification_worker()
     _sync_mealie_tags()
@@ -90,7 +101,7 @@ def _sync_mealie_tags() -> None:
             if tags:
                 import_mealie_tags(tags)
         except Exception:
-            pass
+            logger.warning("Échec de synchronisation des tags Mealie au démarrage", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +134,7 @@ def _mealie_tag_mapping_context() -> tuple[dict[str, dict], dict[str, str]] | No
         }
         return canonical_by_id, canonical_id_by_mealie_name
     except Exception:
+        logger.warning("Échec de chargement du contexte de mapping de tags Mealie", exc_info=True)
         return None
 
 
@@ -160,6 +172,7 @@ def _resolve_mealie_slot_tags(slots: list[dict[str, Any]]) -> None:
         try:
             recipe = get_recipe(slot["mealie_slug"])
         except Exception:
+            logger.warning("Mealie: échec de récupération de la recette %s", slot["mealie_slug"], exc_info=True)
             recipe = None
         if not recipe:
             continue
@@ -549,7 +562,7 @@ def _build_recipe_list(include_hidden: bool) -> list[dict[str, Any]]:
                     "last_used": stats.get("last_date"),
                 })
         except Exception:
-            pass
+            logger.warning("Mealie: échec de construction de la liste de recettes", exc_info=True)
 
     return results
 

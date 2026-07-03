@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 import {
   DndContext,
@@ -199,7 +199,7 @@ function useFilterableTags(): CanonicalTag[] {
   useEffect(() => {
     api<CanonicalTag[]>("/api/tags")
       .then((t) => setTags(t.filter((x) => x.is_filter).sort((a, b) => a.name.localeCompare(b.name))))
-      .catch(() => {});
+      .catch(() => notify("Impossible de charger les tags de filtre."));
   }, []);
   return tags;
 }
@@ -211,7 +211,7 @@ function hasTag(r: Recipe, tagId: string): boolean {
 function useChildren(): Child[] {
   const [children, setChildren] = useState<Child[]>([]);
   useEffect(() => {
-    api<Child[]>("/api/children").then(setChildren).catch(() => {});
+    api<Child[]>("/api/children").then(setChildren).catch(() => notify("Impossible de charger la liste des enfants."));
   }, []);
   return children;
 }
@@ -222,7 +222,7 @@ function useChildren(): Child[] {
 function usePeople(): Child[] {
   const [people, setPeople] = useState<Child[]>([]);
   useEffect(() => {
-    api<Child[]>("/api/people").then(setPeople).catch(() => {});
+    api<Child[]>("/api/people").then(setPeople).catch(() => notify("Impossible de charger la liste des personnes."));
   }, []);
   return people;
 }
@@ -369,6 +369,61 @@ function PresenceBadge({
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 
+// ─── Toasts ─────────────────────────────────────────────────────────────────
+
+type Toast = { id: number; text: string; kind: "error" | "info" };
+
+let toasts: Toast[] = [];
+const toastListeners = new Set<() => void>();
+let toastIdSeq = 0;
+
+function emitToasts() {
+  for (const listener of toastListeners) listener();
+}
+
+function notify(text: string, kind: Toast["kind"] = "error") {
+  const id = ++toastIdSeq;
+  toasts = [...toasts, { id, text, kind }];
+  emitToasts();
+  setTimeout(() => {
+    toasts = toasts.filter((t) => t.id !== id);
+    emitToasts();
+  }, 4000);
+}
+
+function dismissToast(id: number) {
+  toasts = toasts.filter((t) => t.id !== id);
+  emitToasts();
+}
+
+function useToasts(): Toast[] {
+  return useSyncExternalStore(
+    (cb) => {
+      toastListeners.add(cb);
+      return () => toastListeners.delete(cb);
+    },
+    () => toasts
+  );
+}
+
+function ToastContainer() {
+  const items = useToasts();
+  if (!items.length) return null;
+  return (
+    <div className="toast-container">
+      {items.map((t) => (
+        <div
+          key={t.id}
+          className={`toast toast-${t.kind}`}
+          onClick={() => dismissToast(t.id)}
+        >
+          {t.text}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function App() {
   const [user, setUser] = useState<CurrentUser | null>(null);
   const [view, setView] = useState<ViewMode>("week");
@@ -423,6 +478,7 @@ function App() {
         {view === "stats" && <StatsScreen />}
         {view === "settings" && <SettingsScreen canAdmin={canAdmin} />}
       </div>
+      <ToastContainer />
     </div>
   );
 }
@@ -468,7 +524,7 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
       setSlots(data.slots);
       setPresence(data.presence ?? {});
     } catch {
-      // silent
+      notify("Impossible de charger la semaine.");
     } finally {
       setLoading(false);
     }
@@ -483,7 +539,7 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
       );
       setMonthSlots(data.slots);
     } catch {
-      // silent
+      notify("Impossible de charger le mois.");
     }
   }, [monthCursor]);
 
@@ -522,7 +578,9 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
           ...prev.filter((s) => s.slot_date !== dateA && s.slot_date !== dateB),
           updated,
         ]);
-      } catch {}
+      } catch {
+        notify("Impossible de déplacer le repas.");
+      }
       return;
     }
     try {
@@ -535,14 +593,18 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
         res.slot_a,
         res.slot_b,
       ]);
-    } catch {}
+    } catch {
+      notify("Impossible d'échanger les repas.");
+    }
   }
 
   async function handleClear(slotDate: string) {
     try {
       await api(`/api/week/${weekStart}/slot/${slotDate}`, { method: "DELETE" });
       setSlots((prev) => prev.filter((s) => s.slot_date !== slotDate));
-    } catch {}
+    } catch {
+      notify("Impossible de retirer le repas.");
+    }
   }
 
   // Persiste le choix du wizard : recipe=null -> ne touche pas au repas,
@@ -574,7 +636,9 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
           setSlots((prev) => prev.map((s) => (s.id === slotId ? { ...s, sides: savedSides } : s)));
         }
       }
-    } catch {}
+    } catch {
+      notify("Impossible d'enregistrer le repas.");
+    }
     setWizard(null);
   }
 
@@ -821,7 +885,10 @@ function DatePickerModal({
   useEffect(() => {
     api<{ slots: MealSlot[] }>(`/api/month/${cursor.year}/${cursor.month}`)
       .then((d) => setSlots(d.slots))
-      .catch(() => setSlots([]));
+      .catch(() => {
+        setSlots([]);
+        notify("Impossible de charger le calendrier.");
+      });
   }, [cursor]);
 
   return (
@@ -870,8 +937,8 @@ function SidesEditor({ sides, onChange }: { sides: SlotSide[]; onChange: (s: Slo
   const [favorites, setFavorites] = useState<FavoriteSide[]>([]);
 
   useEffect(() => {
-    api<Side[]>("/api/sides").then(setLibSides).catch(() => {});
-    api<FavoriteSide[]>("/api/sides/favorites").then(setFavorites).catch(() => {});
+    api<Side[]>("/api/sides").then(setLibSides).catch(() => notify("Impossible de charger la bibliothèque d'accompagnements."));
+    api<FavoriteSide[]>("/api/sides/favorites").then(setFavorites).catch(() => notify("Impossible de charger les accompagnements favoris."));
   }, []);
 
   const suggestions = input.length > 0
@@ -1046,7 +1113,7 @@ function MealWizard({
     api<Recipe[]>("/api/recipes")
       .then(setRecipes)
       .finally(() => setLoading(false));
-    api<Recipe[]>(`/api/recipes/favorites?date=${encodeURIComponent(date)}`).then(setFavorites).catch(() => {});
+    api<Recipe[]>(`/api/recipes/favorites?date=${encodeURIComponent(date)}`).then(setFavorites).catch(() => notify("Impossible de charger les recettes favorites."));
   }, [mode, date]);
 
   function toggleFilter(f: string) {
@@ -1617,7 +1684,7 @@ function RecipeDetailModal({
     if (recipe.source !== "local") return;
     api<CanonicalTag[]>("/api/tags")
       .then((t) => setAllTags([...t].sort((a, b) => a.name.localeCompare(b.name))))
-      .catch(() => {});
+      .catch(() => notify("Impossible de charger les tags."));
   }, [recipe.source]);
 
   function toggleLikedBy(childId: string) {
@@ -1834,7 +1901,7 @@ function LocalRecipeModal({
   useEffect(() => {
     api<CanonicalTag[]>("/api/tags")
       .then((t) => setAllTags([...t].sort((a, b) => a.name.localeCompare(b.name))))
-      .catch(() => {});
+      .catch(() => notify("Impossible de charger les tags."));
   }, []);
 
   function toggleLikedBy(childId: string) {
@@ -1958,7 +2025,7 @@ function StatsScreen() {
   useEffect(() => {
     api<FreqEntry[]>(`/api/stats/frequency?weeks=${freqWeeks}`)
       .then(setFreq)
-      .catch(() => {});
+      .catch(() => notify("Impossible de charger les statistiques."));
   }, [freqWeeks]);
 
   async function search() {
@@ -2076,8 +2143,8 @@ function TagMappingsSection() {
   const [syncing, setSyncing] = useState(false);
 
   useEffect(() => {
-    api<TagMapping[]>("/api/tag-mappings").then(setMappings).catch(() => {});
-    api<CanonicalTag[]>("/api/tags").then(setTags).catch(() => {});
+    api<TagMapping[]>("/api/tag-mappings").then(setMappings).catch(() => notify("Impossible de charger les mappings de tags."));
+    api<CanonicalTag[]>("/api/tags").then(setTags).catch(() => notify("Impossible de charger les tags."));
   }, []);
 
   async function confirm(mapping: TagMapping, canonicalId: string | undefined, status: string) {
@@ -2167,7 +2234,7 @@ function CanonicalTagsSection() {
   useEffect(() => {
     api<CanonicalTag[]>("/api/tags")
       .then((t) => setTags([...t].sort((a, b) => a.name.localeCompare(b.name))))
-      .catch(() => {});
+      .catch(() => notify("Impossible de charger les tags."));
   }, []);
 
   async function addTag() {
@@ -2263,7 +2330,7 @@ function ChildColorsSection() {
   const [children, setChildren] = useState<Child[]>([]);
 
   useEffect(() => {
-    api<Child[]>("/api/children").then(setChildren).catch(() => {});
+    api<Child[]>("/api/children").then(setChildren).catch(() => notify("Impossible de charger les enfants."));
   }, []);
 
   async function recolor(id: string, color: string) {
@@ -2299,7 +2366,7 @@ function FamilyMembersSection() {
   const [newName, setNewName] = useState("");
 
   useEffect(() => {
-    api<Child[]>("/api/family-members").then(setMembers).catch(() => {});
+    api<Child[]>("/api/family-members").then(setMembers).catch(() => notify("Impossible de charger les membres de la famille."));
   }, []);
 
   async function addMember() {
@@ -2398,7 +2465,10 @@ function NotificationsSection() {
           setLoading(false);
         }
       })
-      .catch(() => setLoading(false));
+      .catch(() => {
+        setLoading(false);
+        notify("Impossible de charger la configuration des notifications.");
+      });
   }, []);
 
   async function subscribe() {

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 import os
 import time
 from typing import Any
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 _MEALIE_URL = os.getenv("MEALIE_URL", "https://mealie.kb87.net")
 _MEALIE_API_KEY = os.getenv("MEALIE_API_KEY", "")
@@ -67,7 +70,7 @@ def get_mealie_tags() -> list[str]:
         _tag_cache = [t["name"] for t in items if "name" in t]
         _tag_cache_at = time.time()
     except Exception:
-        pass
+        logger.warning("Mealie: échec de récupération des tags", exc_info=True)
     return _tag_cache
 
 

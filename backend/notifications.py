@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 import time
 from typing import Any
 
 from menu_app.store import list_push_subscriptions, connect
+
+logger = logging.getLogger(__name__)
 
 _VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY", "")
 _VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "")
@@ -30,7 +33,7 @@ def _worker_loop() -> None:
         try:
             flush_notifications()
         except Exception:
-            pass
+            logger.warning("Échec de l'envoi des notifications push", exc_info=True)
 
 
 def flush_notifications(force: bool = False) -> dict[str, Any]:
