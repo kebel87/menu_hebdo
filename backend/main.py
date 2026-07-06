@@ -4,6 +4,7 @@ import logging
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 from typing import Any
 
@@ -114,6 +115,8 @@ def startup() -> None:
     start_notification_worker()
     _sync_mealie_tags()
     _start_reconciliation_worker()
+    _refresh_external_caches()
+    _start_external_sync_worker()
 
 
 def _sync_mealie_tags() -> None:
@@ -124,6 +127,44 @@ def _sync_mealie_tags() -> None:
                 import_mealie_tags(tags)
         except Exception:
             logger.warning("Échec de synchronisation des tags Mealie au démarrage", exc_info=True)
+
+
+_EXTERNAL_SYNC_INTERVAL = 1800  # 30 min
+_external_sync_thread: threading.Thread | None = None
+
+
+def _refresh_external_caches() -> dict[str, int]:
+    """Rafraîchit proactivement les caches Mealie (recettes) et calendrier
+    (présence) en arrière-plan, pour que les requêtes utilisateur (/api/week)
+    ne fassent jamais d'appel HTTP externe dans leur chemin critique."""
+    result = {"recipes": 0, "presence_days": 0}
+    if mealie_ok():
+        try:
+            result["recipes"] = len(get_recipes(force=True))
+        except Exception:
+            logger.warning("Échec de rafraîchissement du cache Mealie", exc_info=True)
+    try:
+        result["presence_days"] = calendar_client.refresh_presence_window()
+    except Exception:
+        logger.warning("Échec de rafraîchissement du cache de présence", exc_info=True)
+    return result
+
+
+def _external_sync_loop() -> None:
+    while True:
+        time.sleep(_EXTERNAL_SYNC_INTERVAL)
+        try:
+            _refresh_external_caches()
+        except Exception:
+            logger.warning("Échec du cycle de synchronisation externe", exc_info=True)
+
+
+def _start_external_sync_worker() -> None:
+    global _external_sync_thread
+    if _external_sync_thread and _external_sync_thread.is_alive():
+        return
+    _external_sync_thread = threading.Thread(target=_external_sync_loop, daemon=True)
+    _external_sync_thread.start()
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +223,10 @@ def _canonical_tags_for_mealie_recipe(
 
 def _resolve_mealie_slot_tags(slots: list[dict[str, Any]]) -> None:
     """Complète (in place) slot["tags"] pour les slots Mealie, en résolvant les tags
-    natifs Mealie de la recette vers les tags canoniques confirmés (mealie_tag_mappings)."""
+    natifs Mealie de la recette vers les tags canoniques confirmés (mealie_tag_mappings).
+    Utilise la liste résumée (déjà en cache, sert aussi à l'écran Recettes) plutôt que
+    l'endpoint détail : elle contient déjà les tags, inutile de refaire un appel HTTP
+    par recette juste pour ça."""
     mealie_slots = [s for s in slots if s.get("recipe_source") == "mealie" and s.get("mealie_slug")]
     if not mealie_slots or not mealie_ok():
         return
@@ -190,12 +234,13 @@ def _resolve_mealie_slot_tags(slots: list[dict[str, Any]]) -> None:
     if ctx is None:
         return
     canonical_by_id, canonical_id_by_mealie_name = ctx
+    try:
+        recipes_by_slug = {r["slug"]: r for r in get_recipes() if "slug" in r}
+    except Exception:
+        logger.warning("Mealie: échec de récupération de la liste des recettes", exc_info=True)
+        return
     for slot in mealie_slots:
-        try:
-            recipe = get_recipe(slot["mealie_slug"])
-        except Exception:
-            logger.warning("Mealie: échec de récupération de la recette %s", slot["mealie_slug"], exc_info=True)
-            recipe = None
+        recipe = recipes_by_slug.get(slot["mealie_slug"])
         if not recipe:
             continue
         slot["tags"] = _canonical_tags_for_mealie_recipe(recipe, canonical_by_id, canonical_id_by_mealie_name)
@@ -210,10 +255,11 @@ def _week_presence(week_start: str) -> dict[str, Any]:
         start = date.fromisoformat(week_start)
     except ValueError:
         return {}
+    days = [(start + timedelta(days=i)).isoformat() for i in range(7)]
     presence: dict[str, Any] = {}
-    for i in range(7):
-        iso_day = (start + timedelta(days=i)).isoformat()
-        day_presence = calendar_client.get_presence(iso_day)
+    with ThreadPoolExecutor(max_workers=7) as pool:
+        results = pool.map(calendar_client.get_presence, days)
+    for iso_day, day_presence in zip(days, results):
         if day_presence is not None:
             presence[iso_day] = day_presence
     return presence
@@ -977,6 +1023,15 @@ def api_confirm_tag_mapping(
         status=body.get("status", "confirmed"),
         confirmed_by=actor.name,
     )
+
+
+@app.post("/api/sync/refresh")
+def api_sync_refresh(
+    actor: Actor = Depends(require_permission("settings.manage")),
+) -> dict:
+    """Force immédiatement le rafraîchissement des caches Mealie (recettes) et
+    calendrier (présence), sans attendre le prochain cycle du worker périodique."""
+    return _refresh_external_caches()
 
 
 @app.post("/api/tag-mappings/sync")

@@ -2625,6 +2625,7 @@ function SettingsScreen({ canAdmin }: { canAdmin: boolean }) {
       )}
       {canAdmin && tab === "general" && (
         <>
+          <SyncSection />
           <TagMappingsSection />
           <CanonicalTagsSection />
           <ChildColorsSection />
@@ -2639,6 +2640,37 @@ function SettingsScreen({ canAdmin }: { canAdmin: boolean }) {
         </>
       )}
       <NotificationsSection />
+    </div>
+  );
+}
+
+function SyncSection() {
+  const [syncing, setSyncing] = useState(false);
+
+  async function syncNow() {
+    setSyncing(true);
+    try {
+      const result = await api<{ recipes: number; presence_days: number }>("/api/sync/refresh", { method: "POST" });
+      notify(`Synchronisé : ${result.recipes} recette(s) Mealie, présence sur ${result.presence_days} jour(s).`);
+    } catch {
+      notify("Échec de la synchronisation.");
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  return (
+    <div className="settings-section">
+      <div style={{ display: "flex", alignItems: "center" }}>
+        <h2 style={{ flex: 1, margin: 0 }}>Synchronisation</h2>
+        <button className="btn btn-secondary" onClick={syncNow} disabled={syncing}>
+          <RefreshCw size={13} /> {syncing ? "…" : "Synchroniser maintenant"}
+        </button>
+      </div>
+      <p style={{ fontSize: 12, color: "var(--muted)", margin: "6px 0 0" }}>
+        Les recettes Mealie et la présence des enfants sont rafraîchies automatiquement toutes les 30 minutes.
+        Utilise ce bouton pour forcer une mise à jour immédiate.
+      </p>
     </div>
   );
 }
