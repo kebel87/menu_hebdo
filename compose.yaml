@@ -40,8 +40,14 @@ services:
       VAPID_PRIVATE_KEY: "${VAPID_PRIVATE_KEY}"
       VAPID_CONTACT_EMAIL: "kevin.belleau@gmail.com"
       MENU_DATA_DIR: "/app/data"
+      BACKUP_DB_PATH: "${BACKUP_DB_PATH:-/app/data/menu.db}"
+      BACKUP_DIR: "${BACKUP_DIR:-/app/data/backups}"
+      BACKUP_KEEP_LOCAL: "${BACKUP_KEEP_LOCAL:-14}"
+      BACKUP_RCLONE_DEST: "${BACKUP_RCLONE_DEST:-gdrive-crypt:}"
+      RCLONE_CONFIG: "${RCLONE_CONFIG:-/config/rclone/rclone.conf}"
     volumes:
       - ./data:/app/data
+      - ./rclone:/config/rclone
     networks:
       - default
       - inventaire-net

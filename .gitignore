@@ -1,5 +1,6 @@
 data/*.db
 data/backups/
+rclone/
 __pycache__/
 *.pyc
 .env
