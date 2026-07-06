@@ -16,7 +16,7 @@ _CALENDAR_API_TOKEN = os.getenv("CALENDAR_API_TOKEN", "")
 # 30 min ; ce TTL n'est qu'un filet de securite pour les dates hors de la fenetre
 # prechargee (ex. navigation vers un mois eloigne).
 _PRESENCE_CACHE_TTL = 1800
-_PRESENCE_PREFETCH_DAYS = 14  # semaine courante + suivante
+_PRESENCE_PREFETCH_DAYS = 28  # ~4 semaines : couvre la planification typique a l'avance
 _CHILDREN_CACHE_TTL = 3600
 
 _presence_cache: dict[str, tuple[float, dict[str, Any]]] = {}
