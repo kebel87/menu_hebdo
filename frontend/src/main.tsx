@@ -206,6 +206,11 @@ interface InventoryProduct {
   quantity: number;
 }
 
+interface NotificationConfig {
+  vapid_public_key: string;
+  enabled: boolean;
+}
+
 interface HistoryResult {
   id: string;
   slot_date: string;
@@ -264,6 +269,28 @@ let recipeListCache: Recipe[] | null = null;
 let recipeListPromise: Promise<Recipe[]> | null = null;
 let sideStatsCache: SideStat[] | null = null;
 let sideStatsPromise: Promise<SideStat[]> | null = null;
+const statsCache = new Map<number, { freq: FreqEntry[]; contextStats: ContextStats }>();
+const statsPromises = new Map<number, Promise<{ freq: FreqEntry[]; contextStats: ContextStats }>>();
+let tagMappingsCache: TagMapping[] | null = null;
+let tagMappingsPromise: Promise<TagMapping[]> | null = null;
+let canonicalTagsCache: CanonicalTag[] | null = null;
+let canonicalTagsPromise: Promise<CanonicalTag[]> | null = null;
+let childrenCache: Child[] | null = null;
+let childrenPromise: Promise<Child[]> | null = null;
+let familyMembersCache: Child[] | null = null;
+let familyMembersPromise: Promise<Child[]> | null = null;
+let mealContextsCache: MealContext[] | null = null;
+let mealContextsPromise: Promise<MealContext[]> | null = null;
+let notificationConfigCache: NotificationConfig | null = null;
+let notificationConfigPromise: Promise<NotificationConfig> | null = null;
+let ingredientMappingsCache: IngredientMapping[] | null = null;
+let ingredientMappingsPromise: Promise<IngredientMapping[]> | null = null;
+let canonicalIngredientsCache: CanonicalIngredient[] | null = null;
+let canonicalIngredientsPromise: Promise<CanonicalIngredient[]> | null = null;
+let ingredientLinksCache: IngredientInventoryLink[] | null = null;
+let ingredientLinksPromise: Promise<IngredientInventoryLink[]> | null = null;
+let inventoryProductsCache: InventoryProduct[] | null = null;
+let inventoryProductsPromise: Promise<InventoryProduct[]> | null = null;
 
 function loadRecipeList(): Promise<Recipe[]> {
   if (recipeListCache) return Promise.resolve(recipeListCache);
@@ -286,6 +313,11 @@ function prefetchRecipeList() {
 
 function replaceRecipeListCache(updater: (recipes: Recipe[]) => Recipe[]) {
   if (recipeListCache) recipeListCache = updater(recipeListCache);
+}
+
+function invalidateRecipeListCache() {
+  recipeListCache = null;
+  recipeListPromise = null;
 }
 
 function loadSideStats(): Promise<SideStat[]> {
@@ -314,6 +346,207 @@ function replaceSideStatsCache(updater: (sides: SideStat[]) => SideStat[]) {
 function invalidateSideStatsCache() {
   sideStatsCache = null;
   sideStatsPromise = null;
+}
+
+function loadStats(weeks: number): Promise<{ freq: FreqEntry[]; contextStats: ContextStats }> {
+  const cached = statsCache.get(weeks);
+  if (cached) return Promise.resolve(cached);
+  const pending = statsPromises.get(weeks);
+  if (pending) return pending;
+  const promise = Promise.all([
+    api<FreqEntry[]>(`/api/stats/frequency?weeks=${weeks}`),
+    api<ContextStats>(`/api/stats/contexts?weeks=${weeks}`),
+  ])
+    .then(([freq, contextStats]) => {
+      const stats = { freq, contextStats };
+      statsCache.set(weeks, stats);
+      return stats;
+    })
+    .finally(() => {
+      statsPromises.delete(weeks);
+    });
+  statsPromises.set(weeks, promise);
+  return promise;
+}
+
+function prefetchStats() {
+  loadStats(12).catch(() => undefined);
+}
+
+function byName<T extends { name: string }>(items: T[]): T[] {
+  return [...items].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function loadTagMappings(): Promise<TagMapping[]> {
+  if (tagMappingsCache) return Promise.resolve(tagMappingsCache);
+  if (!tagMappingsPromise) {
+    tagMappingsPromise = api<TagMapping[]>("/api/tag-mappings")
+      .then((mappings) => {
+        tagMappingsCache = mappings;
+        return mappings;
+      })
+      .finally(() => { tagMappingsPromise = null; });
+  }
+  return tagMappingsPromise;
+}
+
+function replaceTagMappingsCache(updater: (mappings: TagMapping[]) => TagMapping[]) {
+  if (tagMappingsCache) tagMappingsCache = updater(tagMappingsCache);
+}
+
+function loadCanonicalTags(): Promise<CanonicalTag[]> {
+  if (canonicalTagsCache) return Promise.resolve(canonicalTagsCache);
+  if (!canonicalTagsPromise) {
+    canonicalTagsPromise = api<CanonicalTag[]>("/api/tags")
+      .then((tags) => {
+        canonicalTagsCache = byName(tags);
+        return canonicalTagsCache;
+      })
+      .finally(() => { canonicalTagsPromise = null; });
+  }
+  return canonicalTagsPromise;
+}
+
+function replaceCanonicalTagsCache(updater: (tags: CanonicalTag[]) => CanonicalTag[]) {
+  canonicalTagsCache = byName(updater(canonicalTagsCache ?? []));
+}
+
+function loadChildren(): Promise<Child[]> {
+  if (childrenCache) return Promise.resolve(childrenCache);
+  if (!childrenPromise) {
+    childrenPromise = api<Child[]>("/api/children")
+      .then((children) => {
+        childrenCache = children;
+        return children;
+      })
+      .finally(() => { childrenPromise = null; });
+  }
+  return childrenPromise;
+}
+
+function replaceChildrenCache(updater: (children: Child[]) => Child[]) {
+  if (childrenCache) childrenCache = updater(childrenCache);
+}
+
+function loadFamilyMembers(): Promise<Child[]> {
+  if (familyMembersCache) return Promise.resolve(familyMembersCache);
+  if (!familyMembersPromise) {
+    familyMembersPromise = api<Child[]>("/api/family-members")
+      .then((members) => {
+        familyMembersCache = byName(members);
+        return familyMembersCache;
+      })
+      .finally(() => { familyMembersPromise = null; });
+  }
+  return familyMembersPromise;
+}
+
+function replaceFamilyMembersCache(updater: (members: Child[]) => Child[]) {
+  familyMembersCache = byName(updater(familyMembersCache ?? []));
+}
+
+function loadMealContexts(): Promise<MealContext[]> {
+  if (mealContextsCache) return Promise.resolve(mealContextsCache);
+  if (!mealContextsPromise) {
+    mealContextsPromise = api<MealContext[]>("/api/meal-contexts?include_inactive=true")
+      .then((contexts) => {
+        mealContextsCache = byName(contexts);
+        return mealContextsCache;
+      })
+      .finally(() => { mealContextsPromise = null; });
+  }
+  return mealContextsPromise;
+}
+
+function replaceMealContextsCache(updater: (contexts: MealContext[]) => MealContext[]) {
+  mealContextsCache = byName(updater(mealContextsCache ?? []));
+}
+
+function loadNotificationConfig(): Promise<NotificationConfig> {
+  if (notificationConfigCache) return Promise.resolve(notificationConfigCache);
+  if (!notificationConfigPromise) {
+    notificationConfigPromise = api<NotificationConfig>("/api/notifications/config")
+      .then((config) => {
+        notificationConfigCache = config;
+        return config;
+      })
+      .finally(() => { notificationConfigPromise = null; });
+  }
+  return notificationConfigPromise;
+}
+
+function loadIngredientMappings(): Promise<IngredientMapping[]> {
+  if (ingredientMappingsCache) return Promise.resolve(ingredientMappingsCache);
+  if (!ingredientMappingsPromise) {
+    ingredientMappingsPromise = api<IngredientMapping[]>("/api/ingredient-mappings")
+      .then((mappings) => {
+        ingredientMappingsCache = mappings;
+        return mappings;
+      })
+      .finally(() => { ingredientMappingsPromise = null; });
+  }
+  return ingredientMappingsPromise;
+}
+
+function replaceIngredientMappingsCache(updater: (mappings: IngredientMapping[]) => IngredientMapping[]) {
+  if (ingredientMappingsCache) ingredientMappingsCache = updater(ingredientMappingsCache);
+}
+
+function loadCanonicalIngredients(): Promise<CanonicalIngredient[]> {
+  if (canonicalIngredientsCache) return Promise.resolve(canonicalIngredientsCache);
+  if (!canonicalIngredientsPromise) {
+    canonicalIngredientsPromise = api<CanonicalIngredient[]>("/api/canonical-ingredients")
+      .then((ingredients) => {
+        canonicalIngredientsCache = byName(ingredients);
+        return canonicalIngredientsCache;
+      })
+      .finally(() => { canonicalIngredientsPromise = null; });
+  }
+  return canonicalIngredientsPromise;
+}
+
+function replaceCanonicalIngredientsCache(updater: (ingredients: CanonicalIngredient[]) => CanonicalIngredient[]) {
+  canonicalIngredientsCache = byName(updater(canonicalIngredientsCache ?? []));
+}
+
+function loadIngredientLinks(): Promise<IngredientInventoryLink[]> {
+  if (ingredientLinksCache) return Promise.resolve(ingredientLinksCache);
+  if (!ingredientLinksPromise) {
+    ingredientLinksPromise = api<IngredientInventoryLink[]>("/api/ingredient-inventory-links")
+      .then((links) => {
+        ingredientLinksCache = links;
+        return links;
+      })
+      .finally(() => { ingredientLinksPromise = null; });
+  }
+  return ingredientLinksPromise;
+}
+
+function replaceIngredientLinksCache(updater: (links: IngredientInventoryLink[]) => IngredientInventoryLink[]) {
+  if (ingredientLinksCache) ingredientLinksCache = updater(ingredientLinksCache);
+}
+
+function loadInventoryProducts(): Promise<InventoryProduct[]> {
+  if (inventoryProductsCache) return Promise.resolve(inventoryProductsCache);
+  if (!inventoryProductsPromise) {
+    inventoryProductsPromise = api<InventoryProduct[]>("/api/inventory-products")
+      .then((products) => {
+        inventoryProductsCache = byName(products);
+        return inventoryProductsCache;
+      })
+      .finally(() => { inventoryProductsPromise = null; });
+  }
+  return inventoryProductsPromise;
+}
+
+function prefetchSettings(canAdmin: boolean) {
+  loadNotificationConfig().catch(() => undefined);
+  if (!canAdmin) return;
+  loadTagMappings().catch(() => undefined);
+  loadCanonicalTags().catch(() => undefined);
+  loadChildren().catch(() => undefined);
+  loadFamilyMembers().catch(() => undefined);
+  loadMealContexts().catch(() => undefined);
 }
 
 function readableTextColor(hex: string): string {
@@ -597,6 +830,8 @@ function App() {
         setUser(currentUser);
         prefetchRecipeList();
         prefetchSideStats(currentUser.permissions.includes("menu.edit"));
+        prefetchStats();
+        prefetchSettings(currentUser.permissions.includes("settings.manage"));
       })
       .catch(() => setError("Impossible de charger le profil utilisateur."));
   }, []);
@@ -2543,12 +2778,12 @@ function StatsScreen() {
   const [freqWeeks, setFreqWeeks] = useState(12);
 
   useEffect(() => {
-    api<FreqEntry[]>(`/api/stats/frequency?weeks=${freqWeeks}`)
-      .then(setFreq)
+    loadStats(freqWeeks)
+      .then((stats) => {
+        setFreq(stats.freq);
+        setContextStats(stats.contextStats);
+      })
       .catch(() => notify("Impossible de charger les statistiques."));
-    api<ContextStats>(`/api/stats/contexts?weeks=${freqWeeks}`)
-      .then(setContextStats)
-      .catch(() => notify("Impossible de charger les statistiques de sorties."));
   }, [freqWeeks]);
 
   async function search() {
@@ -2775,8 +3010,8 @@ function TagMappingsSection() {
   const [syncing, setSyncing] = useState(false);
 
   useEffect(() => {
-    api<TagMapping[]>("/api/tag-mappings").then(setMappings).catch(() => notify("Impossible de charger les mappings de tags."));
-    api<CanonicalTag[]>("/api/tags").then(setTags).catch(() => notify("Impossible de charger les tags."));
+    loadTagMappings().then(setMappings).catch(() => notify("Impossible de charger les mappings de tags."));
+    loadCanonicalTags().then(setTags).catch(() => notify("Impossible de charger les tags."));
   }, []);
 
   async function confirm(mapping: TagMapping, canonicalId: string | undefined, status: string) {
@@ -2785,14 +3020,18 @@ function TagMappingsSection() {
       body: JSON.stringify({ canonical_tag_id: canonicalId, status }),
     });
     setMappings((prev) => prev.map((m) => (m.mealie_tag_name === mapping.mealie_tag_name ? updated : m)));
+    replaceTagMappingsCache((prev) => prev.map((m) => (m.mealie_tag_name === mapping.mealie_tag_name ? updated : m)));
+    invalidateRecipeListCache();
   }
 
   async function syncTags() {
     setSyncing(true);
     try {
       await api("/api/tag-mappings/sync", { method: "POST" });
-      const updated = await api<TagMapping[]>("/api/tag-mappings");
+      tagMappingsCache = null;
+      const updated = await loadTagMappings();
       setMappings(updated);
+      invalidateRecipeListCache();
     } finally {
       setSyncing(false);
     }
@@ -2864,8 +3103,8 @@ function CanonicalTagsSection() {
   const [newName, setNewName] = useState("");
 
   useEffect(() => {
-    api<CanonicalTag[]>("/api/tags")
-      .then((t) => setTags([...t].sort((a, b) => a.name.localeCompare(b.name))))
+    loadCanonicalTags()
+      .then(setTags)
       .catch(() => notify("Impossible de charger les tags."));
   }, []);
 
@@ -2875,7 +3114,9 @@ function CanonicalTagsSection() {
       method: "POST",
       body: JSON.stringify({ name: newName.trim() }),
     });
-    setTags((prev) => [...prev, t].sort((a, b) => a.name.localeCompare(b.name)));
+    setTags((prev) => byName([...prev, t]));
+    replaceCanonicalTagsCache((prev) => [...prev, t]);
+    invalidateRecipeListCache();
     setNewName("");
   }
 
@@ -2885,7 +3126,9 @@ function CanonicalTagsSection() {
       method: "PATCH",
       body: JSON.stringify({ name: name.trim() }),
     });
-    setTags((prev) => prev.map((x) => (x.id === id ? t : x)).sort((a, b) => a.name.localeCompare(b.name)));
+    setTags((prev) => byName(prev.map((x) => (x.id === id ? t : x))));
+    replaceCanonicalTagsCache((prev) => prev.map((x) => (x.id === id ? t : x)));
+    invalidateRecipeListCache();
   }
 
   async function recolorTag(id: string, color: string) {
@@ -2894,6 +3137,8 @@ function CanonicalTagsSection() {
       body: JSON.stringify({ color }),
     });
     setTags((prev) => prev.map((x) => (x.id === id ? t : x)));
+    replaceCanonicalTagsCache((prev) => prev.map((x) => (x.id === id ? t : x)));
+    invalidateRecipeListCache();
   }
 
   async function toggleTagFilter(id: string, isFilter: boolean) {
@@ -2902,11 +3147,15 @@ function CanonicalTagsSection() {
       body: JSON.stringify({ is_filter: isFilter }),
     });
     setTags((prev) => prev.map((x) => (x.id === id ? t : x)));
+    replaceCanonicalTagsCache((prev) => prev.map((x) => (x.id === id ? t : x)));
+    invalidateRecipeListCache();
   }
 
   async function deleteTag(id: string) {
     await api(`/api/tags/${id}`, { method: "DELETE" });
     setTags((prev) => prev.filter((t) => t.id !== id));
+    replaceCanonicalTagsCache((prev) => prev.filter((t) => t.id !== id));
+    invalidateRecipeListCache();
   }
 
   return (
@@ -2964,8 +3213,8 @@ function IngredientMappingsSection() {
   const [syncing, setSyncing] = useState(false);
 
   useEffect(() => {
-    api<IngredientMapping[]>("/api/ingredient-mappings").then(setMappings).catch(() => notify("Impossible de charger les mappings d'ingrédients."));
-    api<CanonicalIngredient[]>("/api/canonical-ingredients").then(setIngredients).catch(() => notify("Impossible de charger les ingrédients canoniques."));
+    loadIngredientMappings().then(setMappings).catch(() => notify("Impossible de charger les mappings d'ingrédients."));
+    loadCanonicalIngredients().then(setIngredients).catch(() => notify("Impossible de charger les ingrédients canoniques."));
   }, []);
 
   async function confirm(mapping: IngredientMapping, canonicalId: string | undefined, status: string) {
@@ -2974,14 +3223,18 @@ function IngredientMappingsSection() {
       body: JSON.stringify({ canonical_ingredient_id: canonicalId, status }),
     });
     setMappings((prev) => prev.map((m) => (m.mealie_ingredient_text === mapping.mealie_ingredient_text ? updated : m)));
+    replaceIngredientMappingsCache((prev) => prev.map((m) => (m.mealie_ingredient_text === mapping.mealie_ingredient_text ? updated : m)));
+    invalidateRecipeListCache();
   }
 
   async function syncIngredients() {
     setSyncing(true);
     try {
       await api("/api/ingredient-mappings/sync", { method: "POST" });
-      const updated = await api<IngredientMapping[]>("/api/ingredient-mappings");
+      ingredientMappingsCache = null;
+      const updated = await loadIngredientMappings();
       setMappings(updated);
+      invalidateRecipeListCache();
     } catch {
       notify("Impossible de synchroniser les ingrédients Mealie.");
     } finally {
@@ -3058,13 +3311,13 @@ function CanonicalIngredientsSection() {
   const [linkPicker, setLinkPicker] = useState<string | null>(null);
 
   useEffect(() => {
-    api<CanonicalIngredient[]>("/api/canonical-ingredients")
-      .then((t) => setIngredients([...t].sort((a, b) => a.name.localeCompare(b.name))))
+    loadCanonicalIngredients()
+      .then(setIngredients)
       .catch(() => notify("Impossible de charger les ingrédients canoniques."));
-    api<IngredientInventoryLink[]>("/api/ingredient-inventory-links")
+    loadIngredientLinks()
       .then(setLinks)
       .catch(() => notify("Impossible de charger les liens d'inventaire."));
-    api<InventoryProduct[]>("/api/inventory-products")
+    loadInventoryProducts()
       .then(setProducts)
       .catch(() => notify("Impossible de charger le catalogue d'inventaire."));
   }, []);
@@ -3075,7 +3328,9 @@ function CanonicalIngredientsSection() {
       method: "POST",
       body: JSON.stringify({ name: newName.trim() }),
     });
-    setIngredients((prev) => [...prev, ing].sort((a, b) => a.name.localeCompare(b.name)));
+    setIngredients((prev) => byName([...prev, ing]));
+    replaceCanonicalIngredientsCache((prev) => [...prev, ing]);
+    invalidateRecipeListCache();
     setNewName("");
   }
 
@@ -3085,13 +3340,18 @@ function CanonicalIngredientsSection() {
       method: "PATCH",
       body: JSON.stringify({ name: name.trim() }),
     });
-    setIngredients((prev) => prev.map((x) => (x.id === id ? ing : x)).sort((a, b) => a.name.localeCompare(b.name)));
+    setIngredients((prev) => byName(prev.map((x) => (x.id === id ? ing : x))));
+    replaceCanonicalIngredientsCache((prev) => prev.map((x) => (x.id === id ? ing : x)));
+    invalidateRecipeListCache();
   }
 
   async function deleteIngredient(id: string) {
     await api(`/api/canonical-ingredients/${id}`, { method: "DELETE" });
     setIngredients((prev) => prev.filter((x) => x.id !== id));
     setLinks((prev) => prev.filter((l) => l.canonical_ingredient_id !== id));
+    replaceCanonicalIngredientsCache((prev) => prev.filter((x) => x.id !== id));
+    replaceIngredientLinksCache((prev) => prev.filter((l) => l.canonical_ingredient_id !== id));
+    invalidateRecipeListCache();
   }
 
   async function addLink(canonicalIngredientId: string, product: InventoryProduct) {
@@ -3105,12 +3365,16 @@ function CanonicalIngredientsSection() {
       }),
     });
     setLinks((prev) => [...prev.filter((l) => l.id !== link.id), { ...link, is_live: true }]);
+    replaceIngredientLinksCache((prev) => [...prev.filter((l) => l.id !== link.id), { ...link, is_live: true }]);
+    invalidateRecipeListCache();
     setLinkPicker(null);
   }
 
   async function removeLink(linkId: string) {
     await api(`/api/ingredient-inventory-links/${linkId}`, { method: "DELETE" });
     setLinks((prev) => prev.filter((l) => l.id !== linkId));
+    replaceIngredientLinksCache((prev) => prev.filter((l) => l.id !== linkId));
+    invalidateRecipeListCache();
   }
 
   return (
@@ -3205,12 +3469,13 @@ function ChildColorsSection() {
   const [children, setChildren] = useState<Child[]>([]);
 
   useEffect(() => {
-    api<Child[]>("/api/children").then(setChildren).catch(() => notify("Impossible de charger les enfants."));
+    loadChildren().then(setChildren).catch(() => notify("Impossible de charger les enfants."));
   }, []);
 
   async function recolor(id: string, color: string) {
     await api(`/api/children/${id}`, { method: "PATCH", body: JSON.stringify({ color }) });
     setChildren((prev) => prev.map((c) => (c.id === id ? { ...c, color } : c)));
+    replaceChildrenCache((prev) => prev.map((c) => (c.id === id ? { ...c, color } : c)));
   }
 
   if (children.length === 0) return null;
@@ -3241,7 +3506,7 @@ function FamilyMembersSection() {
   const [newName, setNewName] = useState("");
 
   useEffect(() => {
-    api<Child[]>("/api/family-members").then(setMembers).catch(() => notify("Impossible de charger les membres de la famille."));
+    loadFamilyMembers().then(setMembers).catch(() => notify("Impossible de charger les membres de la famille."));
   }, []);
 
   async function addMember() {
@@ -3250,7 +3515,9 @@ function FamilyMembersSection() {
       method: "POST",
       body: JSON.stringify({ name: newName.trim() }),
     });
-    setMembers((prev) => [...prev, m].sort((a, b) => a.name.localeCompare(b.name)));
+    setMembers((prev) => byName([...prev, m]));
+    replaceFamilyMembersCache((prev) => [...prev, m]);
+    invalidateRecipeListCache();
     setNewName("");
   }
 
@@ -3260,17 +3527,23 @@ function FamilyMembersSection() {
       method: "PATCH",
       body: JSON.stringify({ name: name.trim() }),
     });
-    setMembers((prev) => prev.map((x) => (x.id === id ? m : x)).sort((a, b) => a.name.localeCompare(b.name)));
+    setMembers((prev) => byName(prev.map((x) => (x.id === id ? m : x))));
+    replaceFamilyMembersCache((prev) => prev.map((x) => (x.id === id ? m : x)));
+    invalidateRecipeListCache();
   }
 
   async function recolor(id: string, color: string) {
     await api(`/api/family-members/${id}`, { method: "PATCH", body: JSON.stringify({ color }) });
     setMembers((prev) => prev.map((m) => (m.id === id ? { ...m, color } : m)));
+    replaceFamilyMembersCache((prev) => prev.map((m) => (m.id === id ? { ...m, color } : m)));
+    invalidateRecipeListCache();
   }
 
   async function deleteMember(id: string) {
     await api(`/api/family-members/${id}`, { method: "DELETE" });
     setMembers((prev) => prev.filter((m) => m.id !== id));
+    replaceFamilyMembersCache((prev) => prev.filter((m) => m.id !== id));
+    invalidateRecipeListCache();
   }
 
   return (
@@ -3324,7 +3597,7 @@ function MealContextsSection() {
   const [newKind, setNewKind] = useState<MealContext["kind"]>("people");
 
   function load() {
-    api<MealContext[]>("/api/meal-contexts?include_inactive=true")
+    loadMealContexts()
       .then(setContexts)
       .catch(() => notify("Impossible de charger les lieux et restaurants."));
   }
@@ -3337,7 +3610,8 @@ function MealContextsSection() {
       method: "POST",
       body: JSON.stringify({ kind: newKind, name: newName.trim() }),
     });
-    setContexts((prev) => [...prev, c].sort((a, b) => a.name.localeCompare(b.name)));
+    setContexts((prev) => byName([...prev, c]));
+    replaceMealContextsCache((prev) => [...prev, c]);
     setNewName("");
   }
 
@@ -3346,12 +3620,14 @@ function MealContextsSection() {
       method: "PATCH",
       body: JSON.stringify(payload),
     });
-    setContexts((prev) => prev.map((x) => (x.id === id ? c : x)).sort((a, b) => a.name.localeCompare(b.name)));
+    setContexts((prev) => byName(prev.map((x) => (x.id === id ? c : x))));
+    replaceMealContextsCache((prev) => prev.map((x) => (x.id === id ? c : x)));
   }
 
   async function deleteContext(id: string) {
     await api(`/api/meal-contexts/${id}`, { method: "DELETE" });
     setContexts((prev) => prev.map((c) => (c.id === id ? { ...c, is_active: false } : c)));
+    replaceMealContextsCache((prev) => prev.map((c) => (c.id === id ? { ...c, is_active: false } : c)));
   }
 
   const groups: [MealContext["kind"], string][] = [
@@ -3420,7 +3696,7 @@ function NotificationsSection() {
   const [vapidKey, setVapidKey] = useState("");
 
   useEffect(() => {
-    api<{ vapid_public_key: string; enabled: boolean }>("/api/notifications/config")
+    loadNotificationConfig()
       .then((c) => {
         setEnabled(c.enabled);
         setVapidKey(c.vapid_public_key);
