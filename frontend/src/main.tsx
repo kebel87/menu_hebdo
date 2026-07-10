@@ -2219,7 +2219,12 @@ function SidesScreen() {
             <div className="empty-state"><p>Aucun accompagnement trouvé</p></div>
           )}
           {visibleSides.map((s) => (
-            <div key={s.id} className={`side-library-row${s.is_active ? "" : " inactive"}`}>
+            <button
+              key={s.id}
+              type="button"
+              className={`side-library-row${s.is_active ? "" : " inactive"}`}
+              onClick={() => setEditingSide(s)}
+            >
               <div className="side-library-main">
                 <div className="side-library-title-row">
                   <span className="side-library-name">{s.name}</span>
@@ -2230,21 +2235,9 @@ function SidesScreen() {
                 </div>
               </div>
               <div className="side-library-actions">
-                <button
-                  className="btn-icon"
-                  onClick={() => toggleActive(s)}
-                  title={s.is_active ? "Désactiver" : "Activer"}
-                >
-                  {s.is_active ? <Eye size={15} /> : <EyeOff size={15} />}
-                </button>
-                <button className="btn-icon" onClick={() => setEditingSide(s)} title="Modifier">
-                  <Pencil size={14} />
-                </button>
-                <button className="btn-icon" onClick={() => deleteSide(s.id)} title="Supprimer">
-                  <Trash2 size={14} />
-                </button>
+                <Pencil size={15} aria-hidden="true" />
               </div>
-            </div>
+            </button>
           ))}
         </div>
       )}
