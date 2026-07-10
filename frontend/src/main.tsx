@@ -2128,8 +2128,15 @@ function SidesScreen() {
   }
 
   const showInactive = filters.has("inactifs");
+  const showCleanup = filters.has("nettoyage");
   const filtered = sides.filter((s) => {
-    if (s.is_active === showInactive) return false;
+    if (showCleanup) {
+      if (s.is_active && s.total_count > 0) return false;
+    } else if (showInactive) {
+      if (s.is_active) return false;
+    } else if (!s.is_active) {
+      return false;
+    }
     if (q && !searchKey(s.name).includes(searchKey(q))) return false;
     if (filters.has("favoris") && !s.is_favorite) return false;
     return true;
@@ -2140,9 +2147,9 @@ function SidesScreen() {
     return a.name.localeCompare(b.name);
   });
   const activeCount = sides.filter((s) => s.is_active).length;
-  const favoriteCount = sides.filter((s) => s.is_favorite).length;
   const neverUsedCount = sides.filter((s) => s.total_count === 0).length;
   const inactiveCount = sides.filter((s) => !s.is_active).length;
+  const cleanupCount = neverUsedCount + inactiveCount;
 
   async function addSide() {
     if (!newName.trim()) return;
@@ -2180,23 +2187,10 @@ function SidesScreen() {
 
   return (
     <div className="screen-pad">
-      <div className="side-summary-grid">
-        <div className="side-summary-item">
-          <strong>{activeCount}</strong>
-          <span>actifs</span>
-        </div>
-        <div className="side-summary-item">
-          <strong>{favoriteCount}</strong>
-          <span>fréquents</span>
-        </div>
-        <div className="side-summary-item">
-          <strong>{neverUsedCount}</strong>
-          <span>jamais utilisés</span>
-        </div>
-        <div className="side-summary-item">
-          <strong>{inactiveCount}</strong>
-          <span>désactivés</span>
-        </div>
+      <div className="side-summary-strip">
+        <span><strong>{activeCount}</strong> actifs</span>
+        <span><strong>{sides.length}</strong> au total</span>
+        {cleanupCount > 0 && <span><strong>{cleanupCount}</strong> à nettoyer</span>}
       </div>
       <div className="search-bar">
         <Search size={16} style={{ alignSelf: "center", color: "var(--muted)" }} />
@@ -2207,13 +2201,13 @@ function SidesScreen() {
         />
       </div>
       <div className="filter-chips">
-        {["favoris", "inactifs"].map((f) => (
+        {["favoris", "nettoyage", "inactifs"].map((f) => (
           <button
             key={f}
             className={`filter-chip${filters.has(f) ? " active" : ""}`}
             onClick={() => toggleFilter(f)}
           >
-            {f === "favoris" ? "Favoris" : "Désactivés"}
+            {f === "favoris" ? "Fréquents" : f === "nettoyage" ? "À nettoyer" : "Désactivés"}
           </button>
         ))}
       </div>
@@ -2232,8 +2226,7 @@ function SidesScreen() {
                   <SideStatusBadges side={s} />
                 </div>
                 <div className="side-library-meta">
-                  <span>{s.total_count} utilisation{s.total_count > 1 ? "s" : ""}</span>
-                  <span>{s.last_used ? `Dernière fois : ${weeksAgo(s.last_used)}` : "Jamais utilisé"}</span>
+                  <SideUsageMeta side={s} />
                 </div>
               </div>
               <div className="side-library-actions">
@@ -2283,8 +2276,17 @@ function SideStatusBadges({ side }: { side: SideStat }) {
       {!side.is_active && <span className="badge badge-ago">Désactivé</span>}
       {side.is_favorite && <span className="badge badge-lunch">Fréquent</span>}
       {side.total_count === 0 && <span className="badge badge-score-warn">Jamais utilisé</span>}
-      {side.last_used && side.total_count > 0 && <span className="badge badge-weekend">Utilisé</span>}
     </span>
+  );
+}
+
+function SideUsageMeta({ side }: { side: SideStat }) {
+  if (side.total_count === 0) return null;
+  return (
+    <>
+      <span>{side.total_count} utilisation{side.total_count > 1 ? "s" : ""}</span>
+      {side.last_used && <span>{weeksAgo(side.last_used)}</span>}
+    </>
   );
 }
 
