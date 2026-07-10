@@ -31,6 +31,7 @@ import {
   Salad,
   Eye,
   EyeOff,
+  Pencil,
 } from "lucide-react";
 import "./styles.css";
 
@@ -2109,6 +2110,7 @@ function SidesScreen() {
   const [q, setQ] = useState("");
   const [filters, setFilters] = useState<Set<string>>(new Set());
   const [newName, setNewName] = useState("");
+  const [editingSide, setEditingSide] = useState<SideStat | null>(null);
 
   function load() {
     setLoading(true);
@@ -2132,6 +2134,15 @@ function SidesScreen() {
     if (filters.has("favoris") && !s.is_favorite) return false;
     return true;
   });
+  const visibleSides = [...filtered].sort((a, b) => {
+    if (a.is_active !== b.is_active) return a.is_active ? -1 : 1;
+    if (a.is_favorite !== b.is_favorite) return a.is_favorite ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+  const activeCount = sides.filter((s) => s.is_active).length;
+  const favoriteCount = sides.filter((s) => s.is_favorite).length;
+  const neverUsedCount = sides.filter((s) => s.total_count === 0).length;
+  const inactiveCount = sides.filter((s) => !s.is_active).length;
 
   async function addSide() {
     if (!newName.trim()) return;
@@ -2146,9 +2157,10 @@ function SidesScreen() {
 
   async function renameSide(id: string, name: string) {
     if (!name.trim()) return;
-    await api(`/api/sides/${id}`, { method: "PATCH", body: JSON.stringify({ name: name.trim() }) });
+    const updated = await api<SideStat>(`/api/sides/${id}`, { method: "PATCH", body: JSON.stringify({ name: name.trim() }) });
     invalidateSideStatsCache();
-    load();
+    setSides((prev) => prev.map((side) => (side.id === id ? { ...side, ...updated } : side)));
+    setEditingSide(null);
   }
 
   async function toggleActive(s: SideStat) {
@@ -2156,16 +2168,36 @@ function SidesScreen() {
     const updated = { ...s, is_active: !s.is_active };
     setSides((prev) => prev.map((side) => (side.id === s.id ? updated : side)));
     replaceSideStatsCache((prev) => prev.map((side) => (side.id === s.id ? updated : side)));
+    setEditingSide((current) => (current?.id === s.id ? updated : current));
   }
 
   async function deleteSide(id: string) {
     await api(`/api/sides/${id}`, { method: "DELETE" });
     setSides((prev) => prev.filter((s) => s.id !== id));
     replaceSideStatsCache((prev) => prev.filter((s) => s.id !== id));
+    setEditingSide(null);
   }
 
   return (
     <div className="screen-pad">
+      <div className="side-summary-grid">
+        <div className="side-summary-item">
+          <strong>{activeCount}</strong>
+          <span>actifs</span>
+        </div>
+        <div className="side-summary-item">
+          <strong>{favoriteCount}</strong>
+          <span>fréquents</span>
+        </div>
+        <div className="side-summary-item">
+          <strong>{neverUsedCount}</strong>
+          <span>jamais utilisés</span>
+        </div>
+        <div className="side-summary-item">
+          <strong>{inactiveCount}</strong>
+          <span>désactivés</span>
+        </div>
+      </div>
       <div className="search-bar">
         <Search size={16} style={{ alignSelf: "center", color: "var(--muted)" }} />
         <input
@@ -2188,38 +2220,37 @@ function SidesScreen() {
       {loading ? (
         <div className="empty-state"><RefreshCw size={24} className="spin" /></div>
       ) : (
-        <div className="side-stat-list">
-          {filtered.length === 0 && (
+        <div className="side-library-list">
+          {visibleSides.length === 0 && (
             <div className="empty-state"><p>Aucun accompagnement trouvé</p></div>
           )}
-          {filtered.map((s) => (
-            <div key={s.id} className={`side-stat-row${s.is_active ? "" : " inactive"}`}>
-              <button
-                className="btn-icon"
-                onClick={() => toggleActive(s)}
-                title={s.is_active ? "Désactiver (n'apparaîtra plus dans les choix)" : "Activer"}
-              >
-                {s.is_active ? <Eye size={15} /> : <EyeOff size={15} />}
-              </button>
-              <div className="side-stat-main">
-                <input
-                  key={s.id + s.name}
-                  defaultValue={s.name}
-                  className="tag-name-input"
-                  onBlur={(e) => e.target.value !== s.name && renameSide(s.id, e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
-                />
-                <div className="side-stat-meta">
-                  {s.is_favorite && <span className="badge badge-lunch">Favori</span>}
-                  <span className="recipe-last">
-                    {s.last_used ? `Dernière fois : ${weeksAgo(s.last_used)}` : "Jamais utilisé"}
-                  </span>
-                  <span className="recipe-last">{s.total_count} fois</span>
+          {visibleSides.map((s) => (
+            <div key={s.id} className={`side-library-row${s.is_active ? "" : " inactive"}`}>
+              <div className="side-library-main">
+                <div className="side-library-title-row">
+                  <span className="side-library-name">{s.name}</span>
+                  <SideStatusBadges side={s} />
+                </div>
+                <div className="side-library-meta">
+                  <span>{s.total_count} utilisation{s.total_count > 1 ? "s" : ""}</span>
+                  <span>{s.last_used ? `Dernière fois : ${weeksAgo(s.last_used)}` : "Jamais utilisé"}</span>
                 </div>
               </div>
-              <button className="btn-icon" onClick={() => deleteSide(s.id)} title="Supprimer">
-                <X size={13} />
-              </button>
+              <div className="side-library-actions">
+                <button
+                  className="btn-icon"
+                  onClick={() => toggleActive(s)}
+                  title={s.is_active ? "Désactiver" : "Activer"}
+                >
+                  {s.is_active ? <Eye size={15} /> : <EyeOff size={15} />}
+                </button>
+                <button className="btn-icon" onClick={() => setEditingSide(s)} title="Modifier">
+                  <Pencil size={14} />
+                </button>
+                <button className="btn-icon" onClick={() => deleteSide(s.id)} title="Supprimer">
+                  <Trash2 size={14} />
+                </button>
+              </div>
             </div>
           ))}
         </div>
@@ -2233,6 +2264,99 @@ function SidesScreen() {
         />
         <button onClick={addSide}><Plus size={14} /></button>
       </div>
+      {editingSide && (
+        <SideEditorModal
+          side={editingSide}
+          onClose={() => setEditingSide(null)}
+          onSave={(name) => renameSide(editingSide.id, name)}
+          onToggleActive={() => toggleActive(editingSide)}
+          onDelete={() => deleteSide(editingSide.id)}
+        />
+      )}
+    </div>
+  );
+}
+
+function SideStatusBadges({ side }: { side: SideStat }) {
+  return (
+    <span className="side-library-badges">
+      {!side.is_active && <span className="badge badge-ago">Désactivé</span>}
+      {side.is_favorite && <span className="badge badge-lunch">Fréquent</span>}
+      {side.total_count === 0 && <span className="badge badge-score-warn">Jamais utilisé</span>}
+      {side.last_used && side.total_count > 0 && <span className="badge badge-weekend">Utilisé</span>}
+    </span>
+  );
+}
+
+function SideEditorModal({
+  side,
+  onClose,
+  onSave,
+  onToggleActive,
+  onDelete,
+}: {
+  side: SideStat;
+  onClose: () => void;
+  onSave: (name: string) => void;
+  onToggleActive: () => void;
+  onDelete: () => void;
+}) {
+  const [name, setName] = useState(side.name);
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <form
+        className="modal side-editor-modal"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSave(name);
+        }}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div style={{ display: "flex", alignItems: "center", marginBottom: 12 }}>
+          <span className="modal-title" style={{ flex: 1 }}>Modifier l'accompagnement</span>
+          <button className="btn-icon" type="button" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div className="edit-meal-section">
+          <div className="section-label">Nom</div>
+          <input
+            className="side-editor-input"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            autoFocus
+          />
+        </div>
+        <div className="edit-meal-section">
+          <div className="section-label">Utilisation</div>
+          <div className="side-editor-stats">
+            <div>
+              <strong>{side.total_count}</strong>
+              <span>utilisation{side.total_count > 1 ? "s" : ""}</span>
+            </div>
+            <div>
+              <strong>{side.last_used ? weeksAgo(side.last_used) : "Jamais"}</strong>
+              <span>dernière fois</span>
+            </div>
+            <div>
+              <strong>{side.is_active ? "Actif" : "Désactivé"}</strong>
+              <span>dans les choix</span>
+            </div>
+          </div>
+        </div>
+        <div className="modal-sticky-actions">
+          <button className="btn btn-ghost btn-danger-ghost" type="button" onClick={onDelete}>
+            <Trash2 size={14} /> Supprimer
+          </button>
+          <button className="btn btn-secondary" type="button" onClick={onToggleActive}>
+            {side.is_active ? <EyeOff size={14} /> : <Eye size={14} />}
+            {side.is_active ? "Désactiver" : "Activer"}
+          </button>
+          <button className="btn btn-secondary" type="button" onClick={onClose}>Annuler</button>
+          <button className="btn btn-primary" type="submit" disabled={!name.trim() || name.trim() === side.name}>
+            Enregistrer
+          </button>
+        </div>
+      </form>
     </div>
   );
 }
