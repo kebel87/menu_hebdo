@@ -55,6 +55,7 @@ from menu_app.store import (
     list_slots_for_plan,
     list_slots_for_range,
     list_tag_mappings,
+    meal_side_associations,
     meal_context_stats,
     move_slot,
     recipe_frequency,
@@ -1266,6 +1267,14 @@ def api_sides_frequency(
     actor: Actor = Depends(require_permission("menu.read")),
 ) -> list[dict]:
     return side_frequency(weeks)
+
+
+@app.get("/api/stats/meal-side-associations")
+def api_meal_side_associations(
+    weeks: int = 12,
+    actor: Actor = Depends(require_permission("menu.read")),
+) -> list[dict]:
+    return meal_side_associations(weeks)
 
 
 @app.get("/api/stats/contexts")

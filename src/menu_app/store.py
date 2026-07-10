@@ -1446,6 +1446,28 @@ def side_frequency(weeks: int = 12) -> list[dict[str, Any]]:
         return [dict(r) for r in rows]
 
 
+def meal_side_associations(weeks: int = 12) -> list[dict[str, Any]]:
+    """Associations fréquentes entre repas et accompagnements sur N semaines passées."""
+    with connect() as db:
+        rows = db.execute(
+            """SELECT ms.recipe_name,
+                      COALESCE(sd.name, ss.free_text) as side_name,
+                      ss.side_id as side_id,
+                      COUNT(*) as count,
+                      MAX(ms.slot_date) as last_date
+               FROM meal_slot_sides ss
+               JOIN meal_slots ms ON ms.id = ss.slot_id
+               LEFT JOIN sides sd ON sd.id = ss.side_id
+               WHERE ms.slot_date >= date('now', ? || ' days')
+                 AND ms.slot_kind IN ('recipe', 'hosting')
+                 AND COALESCE(sd.name, ss.free_text) != ''
+               GROUP BY ms.recipe_name, COALESCE(ss.side_id, ss.free_text), COALESCE(sd.name, ss.free_text)
+               ORDER BY count DESC, ms.recipe_name, side_name""",
+            (f"-{weeks * 7}",),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def last_planned(recipe_name: str) -> dict[str, Any] | None:
     """Dernière planification d'une recette par son nom."""
     with connect() as db:

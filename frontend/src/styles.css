@@ -824,6 +824,42 @@ body {
 .freq-table td { padding: 8px 8px; border-bottom: 1px solid var(--line); }
 .freq-table tr:last-child td { border-bottom: none; }
 .freq-bar { height: 6px; background: var(--green); border-radius: 3px; min-width: 4px; }
+.stats-association-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.stats-association-panel {
+  min-width: 0;
+}
+.stats-association-panel label {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 10px;
+}
+.stats-association-panel label span {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+}
+.stats-association-panel select {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--ink);
+  padding: 8px 10px;
+  font-size: 14px;
+}
+.stats-association-panel select:focus {
+  outline: none;
+  border-color: var(--green);
+}
+@media (max-width: 720px) {
+  .stats-association-grid {
+    grid-template-columns: 1fr;
+  }
+}
 .stats-summary-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

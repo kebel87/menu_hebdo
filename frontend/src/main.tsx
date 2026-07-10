@@ -232,6 +232,14 @@ interface SideFreqEntry {
   last_date: string;
 }
 
+interface MealSideAssociation {
+  recipe_name: string;
+  side_name: string;
+  side_id?: string;
+  count: number;
+  last_date: string;
+}
+
 interface ContextStatEntry {
   kind: "away" | "hosting" | "restaurant";
   context_id?: string;
@@ -277,8 +285,8 @@ let recipeListCache: Recipe[] | null = null;
 let recipeListPromise: Promise<Recipe[]> | null = null;
 let sideStatsCache: SideStat[] | null = null;
 let sideStatsPromise: Promise<SideStat[]> | null = null;
-const statsCache = new Map<number, { freq: FreqEntry[]; sideFreq: SideFreqEntry[]; contextStats: ContextStats }>();
-const statsPromises = new Map<number, Promise<{ freq: FreqEntry[]; sideFreq: SideFreqEntry[]; contextStats: ContextStats }>>();
+const statsCache = new Map<number, { freq: FreqEntry[]; sideFreq: SideFreqEntry[]; associations: MealSideAssociation[]; contextStats: ContextStats }>();
+const statsPromises = new Map<number, Promise<{ freq: FreqEntry[]; sideFreq: SideFreqEntry[]; associations: MealSideAssociation[]; contextStats: ContextStats }>>();
 let tagMappingsCache: TagMapping[] | null = null;
 let tagMappingsPromise: Promise<TagMapping[]> | null = null;
 let canonicalTagsCache: CanonicalTag[] | null = null;
@@ -356,7 +364,7 @@ function invalidateSideStatsCache() {
   sideStatsPromise = null;
 }
 
-function loadStats(weeks: number): Promise<{ freq: FreqEntry[]; sideFreq: SideFreqEntry[]; contextStats: ContextStats }> {
+function loadStats(weeks: number): Promise<{ freq: FreqEntry[]; sideFreq: SideFreqEntry[]; associations: MealSideAssociation[]; contextStats: ContextStats }> {
   const cached = statsCache.get(weeks);
   if (cached) return Promise.resolve(cached);
   const pending = statsPromises.get(weeks);
@@ -364,10 +372,11 @@ function loadStats(weeks: number): Promise<{ freq: FreqEntry[]; sideFreq: SideFr
   const promise = Promise.all([
     api<FreqEntry[]>(`/api/stats/frequency?weeks=${weeks}`),
     api<SideFreqEntry[]>(`/api/stats/sides-frequency?weeks=${weeks}`),
+    api<MealSideAssociation[]>(`/api/stats/meal-side-associations?weeks=${weeks}`),
     api<ContextStats>(`/api/stats/contexts?weeks=${weeks}`),
   ])
-    .then(([freq, sideFreq, contextStats]) => {
-      const stats = { freq, sideFreq, contextStats };
+    .then(([freq, sideFreq, associations, contextStats]) => {
+      const stats = { freq, sideFreq, associations, contextStats };
       statsCache.set(weeks, stats);
       return stats;
     })
@@ -2896,12 +2905,15 @@ function LocalRecipeModal({
 // ─── StatsScreen ──────────────────────────────────────────────────────────────
 
 function StatsScreen() {
-  const [tab, setTab] = useState<"meals" | "sides" | "contexts">("meals");
+  const [tab, setTab] = useState<"meals" | "sides" | "associations" | "contexts">("meals");
   const [q, setQ] = useState("");
   const [results, setResults] = useState<HistoryResult[]>([]);
   const [searching, setSearching] = useState(false);
   const [freq, setFreq] = useState<FreqEntry[]>([]);
   const [sideFreq, setSideFreq] = useState<SideFreqEntry[]>([]);
+  const [associations, setAssociations] = useState<MealSideAssociation[]>([]);
+  const [associationRecipe, setAssociationRecipe] = useState("");
+  const [associationSide, setAssociationSide] = useState("");
   const [contextStats, setContextStats] = useState<ContextStats | null>(null);
   const [freqWeeks, setFreqWeeks] = useState(12);
 
@@ -2910,6 +2922,7 @@ function StatsScreen() {
       .then((stats) => {
         setFreq(stats.freq);
         setSideFreq(stats.sideFreq);
+        setAssociations(stats.associations);
         setContextStats(stats.contextStats);
       })
       .catch(() => notify("Impossible de charger les statistiques."));
@@ -2928,6 +2941,44 @@ function StatsScreen() {
 
   const maxCount = Math.max(...freq.map((f) => f.count), 1);
   const maxSideCount = Math.max(...sideFreq.map((f) => f.count), 1);
+  const associationRecipeOptions = Array.from(new Set(associations.map((a) => a.recipe_name)))
+    .sort((a, b) => a.localeCompare(b));
+  const associationSideOptions = Array.from(
+    new Map(
+      associations.map((a) => [
+        associationSideKey(a),
+        { key: associationSideKey(a), name: a.side_name },
+      ]),
+    ).values(),
+  ).sort((a, b) => a.name.localeCompare(b.name));
+  const selectedRecipeAssociations = associations
+    .filter((a) => a.recipe_name === associationRecipe)
+    .sort((a, b) => b.count - a.count || a.side_name.localeCompare(b.side_name));
+  const selectedSideAssociations = associations
+    .filter((a) => associationSideKey(a) === associationSide)
+    .sort((a, b) => b.count - a.count || a.recipe_name.localeCompare(b.recipe_name));
+  const maxRecipeSideCount = Math.max(...selectedRecipeAssociations.map((a) => a.count), 1);
+  const maxSideRecipeCount = Math.max(...selectedSideAssociations.map((a) => a.count), 1);
+
+  useEffect(() => {
+    if (associationRecipeOptions.length === 0) {
+      if (associationRecipe) setAssociationRecipe("");
+      return;
+    }
+    if (!associationRecipeOptions.includes(associationRecipe)) {
+      setAssociationRecipe(associationRecipeOptions[0]);
+    }
+  }, [associationRecipe, associationRecipeOptions]);
+
+  useEffect(() => {
+    if (associationSideOptions.length === 0) {
+      if (associationSide) setAssociationSide("");
+      return;
+    }
+    if (!associationSideOptions.some((option) => option.key === associationSide)) {
+      setAssociationSide(associationSideOptions[0].key);
+    }
+  }, [associationSide, associationSideOptions]);
 
   return (
     <div className="screen-pad">
@@ -2940,6 +2991,11 @@ function StatsScreen() {
         <li>
           <button className={tab === "sides" ? "active" : ""} onClick={() => setTab("sides")}>
             Accompagnements
+          </button>
+        </li>
+        <li>
+          <button className={tab === "associations" ? "active" : ""} onClick={() => setTab("associations")}>
+            Associations
           </button>
         </li>
         <li>
@@ -3043,6 +3099,87 @@ function StatsScreen() {
         </div>
       )}
 
+      {tab === "associations" && (
+        <div className="settings-section">
+          <StatsSectionHeader title="Associations repas + accompagnements" weeks={freqWeeks} onWeeksChange={setFreqWeeks} />
+          {associations.length === 0 ? (
+            <div className="empty-state"><p>Pas encore d'associations à afficher</p></div>
+          ) : (
+            <div className="stats-association-grid">
+              <div className="stats-association-panel">
+                <label>
+                  <span>Repas</span>
+                  <select value={associationRecipe} onChange={(e) => setAssociationRecipe(e.target.value)}>
+                    {associationRecipeOptions.map((name) => (
+                      <option key={name} value={name}>{name}</option>
+                    ))}
+                  </select>
+                </label>
+                {selectedRecipeAssociations.length === 0 ? (
+                  <div className="recipe-last">Aucun accompagnement lié</div>
+                ) : (
+                  <table className="freq-table">
+                    <thead>
+                      <tr>
+                        <th>Accompagnement</th>
+                        <th>Fréquence</th>
+                        <th>Dernière fois</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedRecipeAssociations.map((a) => (
+                        <tr key={`${a.recipe_name}-${associationSideKey(a)}`}>
+                          <td>{a.side_name}</td>
+                          <td style={{ width: 120 }}>
+                            <FrequencyBar count={a.count} maxCount={maxRecipeSideCount} />
+                          </td>
+                          <td style={{ fontSize: 12, color: "var(--muted)" }}>{weeksAgo(a.last_date)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+              <div className="stats-association-panel">
+                <label>
+                  <span>Accompagnement</span>
+                  <select value={associationSide} onChange={(e) => setAssociationSide(e.target.value)}>
+                    {associationSideOptions.map((option) => (
+                      <option key={option.key} value={option.key}>{option.name}</option>
+                    ))}
+                  </select>
+                </label>
+                {selectedSideAssociations.length === 0 ? (
+                  <div className="recipe-last">Aucun repas lié</div>
+                ) : (
+                  <table className="freq-table">
+                    <thead>
+                      <tr>
+                        <th>Repas</th>
+                        <th>Fréquence</th>
+                        <th>Dernière fois</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedSideAssociations.map((a) => (
+                        <tr key={`${associationSideKey(a)}-${a.recipe_name}`}>
+                          <td>{a.recipe_name}</td>
+                          <td style={{ width: 120 }}>
+                            <FrequencyBar count={a.count} maxCount={maxSideRecipeCount} />
+                          </td>
+                          <td style={{ fontSize: 12, color: "var(--muted)" }}>{weeksAgo(a.last_date)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {tab === "contexts" && (
         <div className="settings-section">
           <StatsSectionHeader title="Sorties et réceptions" weeks={freqWeeks} onWeeksChange={setFreqWeeks} />
@@ -3131,6 +3268,10 @@ function FrequencyBar({ count, maxCount }: { count: number; maxCount: number }) 
       <span style={{ fontSize: 12, color: "var(--muted)" }}>{count}×</span>
     </div>
   );
+}
+
+function associationSideKey(association: Pick<MealSideAssociation, "side_id" | "side_name">) {
+  return association.side_id || `free:${association.side_name}`;
 }
 
 // ─── SettingsScreen ───────────────────────────────────────────────────────────
