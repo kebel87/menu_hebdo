@@ -595,7 +595,6 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
   const [presence, setPresence] = useState<Record<string, DayPresence>>({});
   const [loading, setLoading] = useState(false);
   const children = useChildren();
-  const [dayActionDate, setDayActionDate] = useState<string | null>(null);
   const [wizard, setWizard] = useState<{ date: string; mode: WizardMode } | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
@@ -815,7 +814,7 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
             const isOver = overId === `drop-${iso}`;
             const openPicker = () => {
               if (!canEdit) return;
-              if (slot) setDayActionDate(iso);
+              if (slot) setWizard({ date: iso, mode: "edit" });
               else setWizard({ date: iso, mode: "new" });
             };
 
@@ -899,22 +898,6 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
       </DndContext>
       )}
 
-      {dayActionDate && slotByDate(dayActionDate) && (
-        <DayActionModal
-          date={dayActionDate}
-          slot={slotByDate(dayActionDate)!}
-          onClose={() => setDayActionDate(null)}
-          onChoose={(mode) => {
-            setDayActionDate(null);
-            if (mode === "reset") {
-              handleClear(dayActionDate);
-              return;
-            }
-            setWizard({ date: dayActionDate, mode });
-          }}
-        />
-      )}
-
       {wizard && (
         <MealWizard
           date={wizard.date}
@@ -922,6 +905,10 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
           mode={wizard.mode}
           canEdit={canEdit}
           onComplete={(result) => handleWizardComplete(wizard.date, result)}
+          onClear={() => {
+            handleClear(wizard.date);
+            setWizard(null);
+          }}
           onClose={() => setWizard(null)}
         />
       )}
@@ -1148,58 +1135,9 @@ function SidesEditor({ sides, onChange }: { sides: SlotSide[]; onChange: (s: Slo
   );
 }
 
-// ─── DayActionModal (jour déjà renseigné : que veut-on modifier ?) ────────────
-
-function DayActionModal({
-  date,
-  slot,
-  onClose,
-  onChoose,
-}: {
-  date: string;
-  slot: MealSlot;
-  onClose: () => void;
-  onChoose: (mode: "meal" | "sides" | "both" | "reset") => void;
-}) {
-  return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: "flex", alignItems: "center", marginBottom: 12 }}>
-          <span className="modal-title" style={{ flex: 1 }}>{fmtDateFull(date)}</span>
-          <button className="btn-icon" onClick={onClose}><X size={18} /></button>
-        </div>
-        <div style={{ marginBottom: 14 }}>
-          <div style={{ fontWeight: 700, fontSize: 15 }}>{slotTitle(slot)}</div>
-          <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
-            {slotSubtitle(slot) || "Aucun accompagnement"}
-          </div>
-        </div>
-        <div className="day-action-list">
-          <button className="btn btn-secondary day-action-btn" onClick={() => onChoose("meal")}>
-            Modifier
-          </button>
-          {slot.slot_kind !== "away" && slot.slot_kind !== "restaurant" && (
-            <>
-              <button className="btn btn-secondary day-action-btn" onClick={() => onChoose("sides")}>
-                Modifier l'accompagnement
-              </button>
-              <button className="btn btn-secondary day-action-btn" onClick={() => onChoose("both")}>
-                Modifier le repas et l'accompagnement
-              </button>
-            </>
-          )}
-          <button className="btn btn-danger day-action-btn" onClick={() => onChoose("reset")}>
-            Remettre à zéro
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ─── MealWizard (modal, choix du repas puis de l'accompagnement) ──────────────
 
-type WizardMode = "new" | "meal" | "sides" | "both";
+type WizardMode = "new" | "edit" | "meal" | "sides" | "both";
 
 function MealWizard({
   date,
@@ -1207,6 +1145,7 @@ function MealWizard({
   mode,
   canEdit,
   onComplete,
+  onClear,
   onClose,
 }: {
   date: string;
@@ -1214,15 +1153,19 @@ function MealWizard({
   mode: WizardMode;
   canEdit: boolean;
   onComplete: (result: WizardResult) => void;
+  onClear?: () => void;
   onClose: () => void;
 }) {
-  const [step, setStep] = useState<"meal" | "sides" | "confirm">(mode === "sides" ? "sides" : "meal");
+  const [step, setStep] = useState<"edit" | "meal" | "sides" | "confirm">(
+    mode === "edit" ? "edit" : mode === "sides" ? "sides" : "meal"
+  );
   const [slotKind, setSlotKind] = useState<SlotKind>(slot?.slot_kind ?? "recipe");
   const [contextId, setContextId] = useState(slot?.context_id ?? "");
   const [chosenRecipe, setChosenRecipe] = useState<Recipe | null>(null);
   const [chosenSides, setChosenSides] = useState<SlotSide[]>(
-    mode === "meal" || mode === "sides" ? (slot?.sides ?? []) : []
+    mode === "meal" || mode === "sides" || mode === "edit" ? (slot?.sides ?? []) : []
   );
+  const [mealChanged, setMealChanged] = useState(false);
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [favorites, setFavorites] = useState<Recipe[]>([]);
   const [contexts, setContexts] = useState<MealContext[]>([]);
@@ -1272,6 +1215,11 @@ function MealWizard({
     setMealListOpen(false);
     setShowAllMeals(false);
     setChosenRecipe(r);
+    setMealChanged(true);
+    if (mode === "edit") {
+      setStep("edit");
+      return;
+    }
     if (mode === "meal") {
       // Le repas seul change : on garde l'accompagnement existant, étape sides sautée.
       setStep("confirm");
@@ -1287,7 +1235,7 @@ function MealWizard({
       slotKind,
       contextId: contextId || undefined,
       contextName: context?.name,
-      recipe: mode === "sides" ? null : chosenRecipe,
+      recipe: mode === "sides" || (mode === "edit" && !mealChanged) ? null : chosenRecipe,
       sides: mode === "meal" ? null : chosenSides,
     });
   }
@@ -1298,7 +1246,7 @@ function MealWizard({
     slotKind === "restaurant" ? c.kind === "restaurant" : c.kind === "people"
   );
   const selectedContext = contexts.find((c) => c.id === contextId);
-  const canConfirm = mode === "sides" || (
+  const canConfirm = mode === "edit" || mode === "sides" || (
     (!needsContext || !!contextId) &&
     (!needsRecipe || !!chosenRecipe)
   );
@@ -1323,26 +1271,81 @@ function MealWizard({
     setContextId("");
     setChosenRecipe(null);
     setChosenSides([]);
+    setMealChanged(true);
     setMealListOpen(false);
     setShowAllMeals(false);
   }
 
+  function handleContextChange(value: string) {
+    setContextId(value);
+    if (mode === "edit") setMealChanged(true);
+  }
+
   function continueAfterContext() {
     if (slotKind === "away" || slotKind === "restaurant") {
-      setStep("confirm");
+      setStep(mode === "edit" ? "edit" : "confirm");
     }
   }
+
+  const editMealLabel = chosenRecipe?.name
+    ?? (slotKind === "away" ? `Chez ${selectedContext?.name ?? slot?.context?.name ?? slot?.recipe_name ?? ""}`
+      : slotKind === "restaurant" ? selectedContext?.name ?? slot?.context?.name ?? slot?.recipe_name
+        : slot ? slotTitle(slot) : "");
+  const editCanSave = canEdit && (
+    step !== "edit" || (
+      (slotKind === "away" || slotKind === "restaurant")
+        ? !!contextId
+        : slotKind === "hosting"
+          ? !!contextId && (!!chosenRecipe || !mealChanged)
+          : !!chosenRecipe || !mealChanged
+    )
+  );
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className={`modal${step === "meal" && needsRecipe ? " meal-picker-modal" : ""}`} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", alignItems: "center", marginBottom: 12 }}>
           <span className="modal-title" style={{ flex: 1 }}>
-            {mode === "sides" ? "Choisir l'accompagnement" : "Choisir un repas"} — {fmtDateFull(date)}
+            {mode === "edit" ? "Modifier le menu" : mode === "sides" ? "Choisir l'accompagnement" : "Choisir un repas"} — {fmtDateFull(date)}
           </span>
           <button className="btn-icon" onClick={onClose}><X size={18} /></button>
         </div>
-        <StepIndicator steps={steps} current={currentIndex} />
+        {mode !== "edit" && <StepIndicator steps={steps} current={currentIndex} />}
+
+        {step === "edit" && slot && (
+          <>
+            <div className="edit-meal-section">
+              <div className="section-label">Repas</div>
+              <div className="edit-meal-card">
+                <div className="edit-meal-main">
+                  <span className="edit-meal-title">{editMealLabel}</span>
+                  <span className="edit-meal-subtitle">{slotKindLabel(slotKind)}</span>
+                </div>
+                <button className="btn btn-secondary btn-sm" onClick={() => setStep("meal")}>
+                  Changer
+                </button>
+              </div>
+            </div>
+
+            {slotKind !== "away" && slotKind !== "restaurant" && (
+              <div className="edit-meal-section">
+                <div className="section-label">Accompagnements</div>
+                <SidesEditor sides={chosenSides} onChange={setChosenSides} />
+              </div>
+            )}
+
+            <div className="form-actions edit-meal-actions">
+              <button className="btn btn-danger btn-sm" onClick={onClear} disabled={!onClear || !canEdit}>
+                Retirer le repas
+              </button>
+              <span className="edit-meal-action-spacer" />
+              <button className="btn btn-secondary" onClick={onClose}>Annuler</button>
+              <button className="btn btn-primary" onClick={handleConfirm} disabled={!editCanSave}>
+                Enregistrer
+              </button>
+            </div>
+          </>
+        )}
 
         {step === "meal" && (
           <>
@@ -1381,7 +1384,7 @@ function MealWizard({
                 <label>{slotKind === "restaurant" ? "Restaurant" : slotKind === "hosting" ? "Qui on reçoit" : "Chez qui"}</label>
                 <select
                   value={contextId}
-                  onChange={(e) => setContextId(e.target.value)}
+                  onChange={(e) => handleContextChange(e.target.value)}
                 >
                   <option value="">Sélectionner…</option>
                   {contextChoices.map((c) => (
@@ -1395,8 +1398,13 @@ function MealWizard({
               <>
                 <div className="form-actions">
                   <button className="btn btn-primary" onClick={continueAfterContext} disabled={!contextId}>
-                    Continuer
+                    {mode === "edit" ? "Appliquer" : "Continuer"}
                   </button>
+                  {mode === "edit" && (
+                    <button className="btn btn-secondary" onClick={() => setStep("edit")}>
+                      Retour
+                    </button>
+                  )}
                 </div>
                 {contextChoices.length === 0 && (
                   <div className="empty-state"><p>Ajoute d'abord des entrées dans les paramètres.</p></div>
@@ -1504,6 +1512,13 @@ function MealWizard({
                     </div>
                   </div>
                 )}
+                {mode === "edit" && (
+                  <div className="form-actions">
+                    <button className="btn btn-secondary" onClick={() => setStep("edit")}>
+                      Retour
+                    </button>
+                  </div>
+                )}
               </>
             )}
           </>
@@ -1518,12 +1533,12 @@ function MealWizard({
             <div className="form-actions">
               <button
                 className="btn btn-secondary"
-                onClick={() => { setChosenSides([]); setStep("confirm"); }}
+                onClick={() => { setChosenSides([]); setStep(mode === "edit" ? "edit" : "confirm"); }}
               >
                 Aucun accompagnement
               </button>
-              <button className="btn btn-primary" onClick={() => setStep("confirm")}>
-                Continuer
+              <button className="btn btn-primary" onClick={() => setStep(mode === "edit" ? "edit" : "confirm")}>
+                {mode === "edit" ? "Appliquer" : "Continuer"}
               </button>
             </div>
           </>

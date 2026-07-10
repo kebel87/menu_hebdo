@@ -1009,9 +1009,50 @@ button.tag-choice {
 .step.done .step-dot { border-color: var(--green); background: var(--green-soft); color: var(--green); }
 .step.done .step-label { color: var(--ink); }
 
-/* ── Day action chooser (jour déjà renseigné) ── */
-.day-action-list { display: flex; flex-direction: column; gap: 8px; }
-.day-action-btn { width: 100%; justify-content: center; }
+/* ── Edition d'un menu existant ── */
+.edit-meal-section {
+  border-top: 1px solid var(--line);
+  padding: 14px 0;
+}
+.edit-meal-section:first-of-type {
+  border-top: none;
+  padding-top: 0;
+}
+.edit-meal-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  padding: 10px;
+}
+.edit-meal-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.edit-meal-title {
+  font-size: 14px;
+  font-weight: 750;
+  color: var(--ink);
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+.edit-meal-subtitle {
+  font-size: 12px;
+  color: var(--muted);
+}
+.edit-meal-actions {
+  align-items: center;
+  flex-wrap: wrap;
+}
+.edit-meal-action-spacer {
+  flex: 1;
+  min-width: 12px;
+}
 
 /* ── Error banner ── */
 .error-banner {
