@@ -3135,34 +3135,58 @@ function FrequencyBar({ count, maxCount }: { count: number; maxCount: number }) 
 
 // ─── SettingsScreen ───────────────────────────────────────────────────────────
 
-type SettingsTab = "general" | "inventory";
+type SettingsTab = "general" | "meals" | "inventory" | "family" | "contexts" | "notifications";
+
+const ADMIN_SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
+  { id: "general", label: "Général" },
+  { id: "meals", label: "Repas" },
+  { id: "inventory", label: "Inventaire" },
+  { id: "family", label: "Famille" },
+  { id: "contexts", label: "Sorties" },
+  { id: "notifications", label: "Notifications" },
+];
+
+const BASIC_SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
+  { id: "notifications", label: "Notifications" },
+];
 
 function SettingsScreen({ canAdmin }: { canAdmin: boolean }) {
-  const [tab, setTab] = useState<SettingsTab>("general");
+  const [tab, setTab] = useState<SettingsTab>(() => (canAdmin ? "general" : "notifications"));
+  const tabs = canAdmin ? ADMIN_SETTINGS_TABS : BASIC_SETTINGS_TABS;
+
+  useEffect(() => {
+    if (!tabs.some((item) => item.id === tab)) {
+      setTab(tabs[0].id);
+    }
+  }, [tab, tabs]);
+
   return (
     <div className="screen-pad">
-      {canAdmin && (
-        <ul className="segmented" style={{ marginBottom: 16 }}>
-          <li>
-            <button className={tab === "general" ? "active" : ""} onClick={() => setTab("general")}>
-              Général
+      <ul className="segmented settings-tabs">
+        {tabs.map((item) => (
+          <li key={item.id}>
+            <button className={tab === item.id ? "active" : ""} onClick={() => setTab(item.id)}>
+              {item.label}
             </button>
           </li>
-          <li>
-            <button className={tab === "inventory" ? "active" : ""} onClick={() => setTab("inventory")}>
-              Inventaire
-            </button>
-          </li>
-        </ul>
-      )}
+        ))}
+      </ul>
+
       {canAdmin && tab === "general" && (
         <>
           <SyncSection />
+        </>
+      )}
+      {canAdmin && tab === "meals" && (
+        <>
           <TagMappingsSection />
           <CanonicalTagsSection />
+        </>
+      )}
+      {canAdmin && tab === "family" && (
+        <>
           <ChildColorsSection />
           <FamilyMembersSection />
-          <MealContextsSection />
         </>
       )}
       {canAdmin && tab === "inventory" && (
@@ -3171,7 +3195,8 @@ function SettingsScreen({ canAdmin }: { canAdmin: boolean }) {
           <CanonicalIngredientsSection />
         </>
       )}
-      <NotificationsSection />
+      {canAdmin && tab === "contexts" && <MealContextsSection />}
+      {tab === "notifications" && <NotificationsSection />}
     </div>
   );
 }
