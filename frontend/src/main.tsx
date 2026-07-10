@@ -259,6 +259,63 @@ async function api<T>(url: string, init: RequestInit = {}): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+const RECIPES_WITH_HIDDEN_URL = "/api/recipes?include_hidden=true";
+let recipeListCache: Recipe[] | null = null;
+let recipeListPromise: Promise<Recipe[]> | null = null;
+let sideStatsCache: SideStat[] | null = null;
+let sideStatsPromise: Promise<SideStat[]> | null = null;
+
+function loadRecipeList(): Promise<Recipe[]> {
+  if (recipeListCache) return Promise.resolve(recipeListCache);
+  if (!recipeListPromise) {
+    recipeListPromise = api<Recipe[]>(RECIPES_WITH_HIDDEN_URL)
+      .then((recipes) => {
+        recipeListCache = recipes;
+        return recipes;
+      })
+      .finally(() => {
+        recipeListPromise = null;
+      });
+  }
+  return recipeListPromise;
+}
+
+function prefetchRecipeList() {
+  loadRecipeList().catch(() => undefined);
+}
+
+function replaceRecipeListCache(updater: (recipes: Recipe[]) => Recipe[]) {
+  if (recipeListCache) recipeListCache = updater(recipeListCache);
+}
+
+function loadSideStats(): Promise<SideStat[]> {
+  if (sideStatsCache) return Promise.resolve(sideStatsCache);
+  if (!sideStatsPromise) {
+    sideStatsPromise = api<SideStat[]>("/api/sides/stats")
+      .then((sides) => {
+        sideStatsCache = sides;
+        return sides;
+      })
+      .finally(() => {
+        sideStatsPromise = null;
+      });
+  }
+  return sideStatsPromise;
+}
+
+function prefetchSideStats(canEdit: boolean) {
+  if (canEdit) loadSideStats().catch(() => undefined);
+}
+
+function replaceSideStatsCache(updater: (sides: SideStat[]) => SideStat[]) {
+  if (sideStatsCache) sideStatsCache = updater(sideStatsCache);
+}
+
+function invalidateSideStatsCache() {
+  sideStatsCache = null;
+  sideStatsPromise = null;
+}
+
 function readableTextColor(hex: string): string {
   const h = hex.replace("#", "");
   const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
@@ -536,7 +593,11 @@ function App() {
 
   useEffect(() => {
     api<CurrentUser>("/api/me")
-      .then(setUser)
+      .then((currentUser) => {
+        setUser(currentUser);
+        prefetchRecipeList();
+        prefetchSideStats(currentUser.permissions.includes("menu.edit"));
+      })
       .catch(() => setError("Impossible de charger le profil utilisateur."));
   }, []);
 
@@ -1594,7 +1655,7 @@ function RecipesScreen({ canEdit }: { canEdit: boolean }) {
   const children = usePeople();
 
   useEffect(() => {
-    api<Recipe[]>("/api/recipes?include_hidden=true")
+    loadRecipeList()
       .then(setRecipes)
       .finally(() => setLoading(false));
   }, []);
@@ -1769,10 +1830,22 @@ function RecipesScreen({ canEdit }: { canEdit: boolean }) {
                   : r
               )
             );
+            replaceRecipeListCache((prev) =>
+              prev.map((r) =>
+                (r.source === updated.source &&
+                  ((r.slug && r.slug === updated.slug) ||
+                    (r.id && r.id === updated.id)))
+                  ? updated
+                  : r
+              )
+            );
             setDetail(updated);
           }}
           onDeleted={() => {
             setRecipes((prev) =>
+              prev.filter((r) => !(r.source === "local" && r.id === detail.id))
+            );
+            replaceRecipeListCache((prev) =>
               prev.filter((r) => !(r.source === "local" && r.id === detail.id))
             );
             setDetail(null);
@@ -1784,6 +1857,7 @@ function RecipesScreen({ canEdit }: { canEdit: boolean }) {
           onClose={() => setShowAddLocal(false)}
           onSaved={(r) => {
             setRecipes((prev) => [...prev, r]);
+            replaceRecipeListCache((prev) => [...prev, r]);
             setShowAddLocal(false);
           }}
         />
@@ -1803,7 +1877,7 @@ function SidesScreen() {
 
   function load() {
     setLoading(true);
-    api<SideStat[]>("/api/sides/stats").then(setSides).finally(() => setLoading(false));
+    loadSideStats().then(setSides).finally(() => setLoading(false));
   }
 
   useEffect(load, []);
@@ -1830,6 +1904,7 @@ function SidesScreen() {
       method: "POST",
       body: JSON.stringify({ name: newName.trim() }),
     });
+    invalidateSideStatsCache();
     setNewName("");
     load();
   }
@@ -1837,17 +1912,21 @@ function SidesScreen() {
   async function renameSide(id: string, name: string) {
     if (!name.trim()) return;
     await api(`/api/sides/${id}`, { method: "PATCH", body: JSON.stringify({ name: name.trim() }) });
+    invalidateSideStatsCache();
     load();
   }
 
   async function toggleActive(s: SideStat) {
     await api(`/api/sides/${s.id}`, { method: "PATCH", body: JSON.stringify({ is_active: !s.is_active }) });
-    load();
+    const updated = { ...s, is_active: !s.is_active };
+    setSides((prev) => prev.map((side) => (side.id === s.id ? updated : side)));
+    replaceSideStatsCache((prev) => prev.map((side) => (side.id === s.id ? updated : side)));
   }
 
   async function deleteSide(id: string) {
     await api(`/api/sides/${id}`, { method: "DELETE" });
     setSides((prev) => prev.filter((s) => s.id !== id));
+    replaceSideStatsCache((prev) => prev.filter((s) => s.id !== id));
   }
 
   return (

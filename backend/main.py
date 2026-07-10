@@ -131,6 +131,14 @@ def _sync_mealie_tags() -> None:
 
 _EXTERNAL_SYNC_INTERVAL = 1800  # 30 min
 _external_sync_thread: threading.Thread | None = None
+_recipe_list_cache_ttl = 300  # 5 min
+_recipe_list_cache: dict[bool, tuple[float, list[dict[str, Any]]]] = {}
+_recipe_list_cache_lock = threading.Lock()
+
+
+def _invalidate_recipe_list_cache() -> None:
+    with _recipe_list_cache_lock:
+        _recipe_list_cache.clear()
 
 
 def _refresh_external_caches() -> dict[str, int]:
@@ -141,6 +149,7 @@ def _refresh_external_caches() -> dict[str, int]:
     if mealie_ok():
         try:
             result["recipes"] = len(get_recipes(force=True))
+            _invalidate_recipe_list_cache()
         except Exception:
             logger.warning("Échec de rafraîchissement du cache Mealie", exc_info=True)
     try:
@@ -613,7 +622,7 @@ def api_create_local_recipe(
     name = body.get("name", "").strip()
     if not name:
         raise HTTPException(status_code=422, detail="name requis")
-    return create_local_recipe(
+    recipe = create_local_recipe(
         name=name,
         ingredients=body.get("ingredients"),
         tag_ids=body.get("tag_ids"),
@@ -623,6 +632,8 @@ def api_create_local_recipe(
         prep_minutes=body.get("prep_minutes"),
         notes=body.get("notes", ""),
     )
+    _invalidate_recipe_list_cache()
+    return recipe
 
 
 @app.patch("/api/local-recipes/{recipe_id}")
@@ -632,7 +643,9 @@ def api_update_local_recipe(
     actor: Actor = Depends(require_permission("menu.edit")),
 ) -> dict:
     try:
-        return update_local_recipe(recipe_id, body)
+        recipe = update_local_recipe(recipe_id, body)
+        _invalidate_recipe_list_cache()
+        return recipe
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -643,6 +656,7 @@ def api_delete_local_recipe(
     actor: Actor = Depends(require_permission("menu.edit")),
 ) -> dict:
     delete_local_recipe(recipe_id)
+    _invalidate_recipe_list_cache()
     return {"ok": True}
 
 
@@ -839,12 +853,24 @@ def _build_recipe_list(include_hidden: bool) -> list[dict[str, Any]]:
     return results
 
 
+def _cached_recipe_list(include_hidden: bool) -> list[dict[str, Any]]:
+    now = time.time()
+    with _recipe_list_cache_lock:
+        cached = _recipe_list_cache.get(include_hidden)
+        if cached and (now - cached[0]) < _recipe_list_cache_ttl:
+            return cached[1]
+    recipes = _build_recipe_list(include_hidden)
+    with _recipe_list_cache_lock:
+        _recipe_list_cache[include_hidden] = (time.time(), recipes)
+    return recipes
+
+
 @app.get("/api/recipes")
 def api_recipes(
     include_hidden: bool = False,
     actor: Actor = Depends(require_permission("menu.read")),
 ) -> list[dict[str, Any]]:
-    return _build_recipe_list(include_hidden)
+    return _cached_recipe_list(include_hidden)
 
 
 def _favorite_boost_group_for_date(iso_date: str | None) -> set[str]:
@@ -892,7 +918,7 @@ def api_recipe_favorites(
     boost, sans changer l'ordre relatif issu de la fréquence/disponibilité."""
     freq = recipe_frequency(weeks=12)
     order = {f["recipe_name"]: i for i, f in enumerate(freq)}
-    all_recipes = _build_recipe_list(include_hidden=False)
+    all_recipes = _cached_recipe_list(include_hidden=False)
     favorites = [r for r in all_recipes if r["name"] in order]
     favorites.sort(key=lambda r: order[r["name"]])
     favorites.sort(key=_score_boost_key)
@@ -932,7 +958,7 @@ def api_update_mealie_meta(
     body: dict = Body(...),
     actor: Actor = Depends(require_permission("menu.edit")),
 ) -> dict:
-    return upsert_recipe_meta(
+    meta = upsert_recipe_meta(
         slug,
         is_weekend=body.get("is_weekend"),
         makes_lunch=body.get("makes_lunch"),
@@ -940,6 +966,8 @@ def api_update_mealie_meta(
         notes=body.get("notes"),
         liked_by=body.get("liked_by"),
     )
+    _invalidate_recipe_list_cache()
+    return meta
 
 
 def _extract_prep(recipe: dict) -> int | None:
@@ -971,9 +999,11 @@ def api_create_tag(
     name = body.get("name", "").strip()
     if not name:
         raise HTTPException(status_code=422, detail="name requis")
-    return create_canonical_tag(
+    tag = create_canonical_tag(
         name, body.get("description", ""), body.get("color", ""), body.get("is_filter", False)
     )
+    _invalidate_recipe_list_cache()
+    return tag
 
 
 @app.patch("/api/tags/{tag_id}")
@@ -983,9 +1013,11 @@ def api_update_tag(
     actor: Actor = Depends(require_permission("settings.manage")),
 ) -> dict:
     try:
-        return update_canonical_tag(
+        tag = update_canonical_tag(
             tag_id, name=body.get("name"), color=body.get("color"), is_filter=body.get("is_filter")
         )
+        _invalidate_recipe_list_cache()
+        return tag
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -996,6 +1028,7 @@ def api_delete_tag(
     actor: Actor = Depends(require_permission("settings.manage")),
 ) -> dict:
     delete_canonical_tag(tag_id)
+    _invalidate_recipe_list_cache()
     return {"ok": True}
 
 
@@ -1017,12 +1050,14 @@ def api_confirm_tag_mapping(
     body: dict = Body(...),
     actor: Actor = Depends(require_permission("settings.manage")),
 ) -> dict:
-    return upsert_tag_mapping(
+    mapping = upsert_tag_mapping(
         mealie_tag_name,
         canonical_tag_id=body.get("canonical_tag_id"),
         status=body.get("status", "confirmed"),
         confirmed_by=actor.name,
     )
+    _invalidate_recipe_list_cache()
+    return mapping
 
 
 @app.post("/api/sync/refresh")
@@ -1040,6 +1075,7 @@ def api_sync_mealie_tags(
 ) -> dict:
     tags = get_mealie_tags()
     import_mealie_tags(tags)
+    _invalidate_recipe_list_cache()
     return {"imported": len(tags)}
 
 
@@ -1075,7 +1111,9 @@ def api_create_canonical_ingredient(
     name = body.get("name", "").strip()
     if not name:
         raise HTTPException(status_code=422, detail="name requis")
-    return create_canonical_ingredient(name)
+    ingredient = create_canonical_ingredient(name)
+    _invalidate_recipe_list_cache()
+    return ingredient
 
 
 @app.patch("/api/canonical-ingredients/{ingredient_id}")
@@ -1088,7 +1126,9 @@ def api_update_canonical_ingredient(
     if not name:
         raise HTTPException(status_code=422, detail="name requis")
     try:
-        return update_canonical_ingredient(ingredient_id, name)
+        ingredient = update_canonical_ingredient(ingredient_id, name)
+        _invalidate_recipe_list_cache()
+        return ingredient
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -1099,6 +1139,7 @@ def api_delete_canonical_ingredient(
     actor: Actor = Depends(require_permission("settings.manage")),
 ) -> dict:
     delete_canonical_ingredient(ingredient_id)
+    _invalidate_recipe_list_cache()
     return {"ok": True}
 
 
@@ -1123,12 +1164,14 @@ def api_create_ingredient_inventory_link(
     inventory_product_id = body.get("inventory_product_id", "")
     if not canonical_ingredient_id or not inventory_product_id:
         raise HTTPException(status_code=422, detail="canonical_ingredient_id et inventory_product_id requis")
-    return create_ingredient_inventory_link(
+    link = create_ingredient_inventory_link(
         canonical_ingredient_id,
         inventory_product_id,
         body.get("inventory_product_name", ""),
         body.get("domain", "frozen"),
     )
+    _invalidate_recipe_list_cache()
+    return link
 
 
 @app.delete("/api/ingredient-inventory-links/{link_id}")
@@ -1137,6 +1180,7 @@ def api_delete_ingredient_inventory_link(
     actor: Actor = Depends(require_permission("settings.manage")),
 ) -> dict:
     delete_ingredient_inventory_link(link_id)
+    _invalidate_recipe_list_cache()
     return {"ok": True}
 
 
@@ -1163,12 +1207,14 @@ def api_confirm_ingredient_mapping(
     body: dict = Body(...),
     actor: Actor = Depends(require_permission("settings.manage")),
 ) -> dict:
-    return upsert_ingredient_mapping(
+    mapping = upsert_ingredient_mapping(
         mealie_ingredient_text,
         canonical_ingredient_id=body.get("canonical_ingredient_id"),
         status=body.get("status", "confirmed"),
         confirmed_by=actor.name,
     )
+    _invalidate_recipe_list_cache()
+    return mapping
 
 
 @app.post("/api/ingredient-mappings/sync")
@@ -1187,6 +1233,7 @@ def api_sync_mealie_ingredients(
             if text:
                 texts.add(text)
     import_mealie_ingredients(sorted(texts))
+    _invalidate_recipe_list_cache()
     return {"imported": len(texts)}
 
 
