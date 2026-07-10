@@ -812,7 +812,7 @@ body {
   flex-wrap: wrap;
   margin-bottom: 10px;
 }
-.stats-section-header h2 {
+.settings-section .stats-section-header h2 {
   margin: 0;
   flex: 1;
 }
