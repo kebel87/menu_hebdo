@@ -1260,6 +1260,14 @@ def api_frequency(
     return recipe_frequency(weeks)
 
 
+@app.get("/api/stats/sides-frequency")
+def api_sides_frequency(
+    weeks: int = 12,
+    actor: Actor = Depends(require_permission("menu.read")),
+) -> list[dict]:
+    return side_frequency(weeks)
+
+
 @app.get("/api/stats/contexts")
 def api_context_stats(
     weeks: int = 12,

@@ -1432,7 +1432,8 @@ def side_frequency(weeks: int = 12) -> list[dict[str, Any]]:
     with connect() as db:
         rows = db.execute(
             """SELECT COALESCE(sd.name, ss.free_text) as name, ss.side_id as side_id,
-                      COUNT(*) as count
+                      COUNT(*) as count,
+                      MAX(ms.slot_date) as last_date
                FROM meal_slot_sides ss
                JOIN meal_slots ms ON ms.id = ss.slot_id
                LEFT JOIN sides sd ON sd.id = ss.side_id

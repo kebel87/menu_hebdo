@@ -225,6 +225,13 @@ interface FreqEntry {
   last_date: string;
 }
 
+interface SideFreqEntry {
+  name: string;
+  side_id?: string;
+  count: number;
+  last_date: string;
+}
+
 interface ContextStatEntry {
   kind: "away" | "hosting" | "restaurant";
   context_id?: string;
@@ -270,8 +277,8 @@ let recipeListCache: Recipe[] | null = null;
 let recipeListPromise: Promise<Recipe[]> | null = null;
 let sideStatsCache: SideStat[] | null = null;
 let sideStatsPromise: Promise<SideStat[]> | null = null;
-const statsCache = new Map<number, { freq: FreqEntry[]; contextStats: ContextStats }>();
-const statsPromises = new Map<number, Promise<{ freq: FreqEntry[]; contextStats: ContextStats }>>();
+const statsCache = new Map<number, { freq: FreqEntry[]; sideFreq: SideFreqEntry[]; contextStats: ContextStats }>();
+const statsPromises = new Map<number, Promise<{ freq: FreqEntry[]; sideFreq: SideFreqEntry[]; contextStats: ContextStats }>>();
 let tagMappingsCache: TagMapping[] | null = null;
 let tagMappingsPromise: Promise<TagMapping[]> | null = null;
 let canonicalTagsCache: CanonicalTag[] | null = null;
@@ -349,17 +356,18 @@ function invalidateSideStatsCache() {
   sideStatsPromise = null;
 }
 
-function loadStats(weeks: number): Promise<{ freq: FreqEntry[]; contextStats: ContextStats }> {
+function loadStats(weeks: number): Promise<{ freq: FreqEntry[]; sideFreq: SideFreqEntry[]; contextStats: ContextStats }> {
   const cached = statsCache.get(weeks);
   if (cached) return Promise.resolve(cached);
   const pending = statsPromises.get(weeks);
   if (pending) return pending;
   const promise = Promise.all([
     api<FreqEntry[]>(`/api/stats/frequency?weeks=${weeks}`),
+    api<SideFreqEntry[]>(`/api/stats/sides-frequency?weeks=${weeks}`),
     api<ContextStats>(`/api/stats/contexts?weeks=${weeks}`),
   ])
-    .then(([freq, contextStats]) => {
-      const stats = { freq, contextStats };
+    .then(([freq, sideFreq, contextStats]) => {
+      const stats = { freq, sideFreq, contextStats };
       statsCache.set(weeks, stats);
       return stats;
     })
@@ -2318,7 +2326,6 @@ function SideEditorModal({
             className="side-editor-input"
             value={name}
             onChange={(event) => setName(event.target.value)}
-            autoFocus
           />
         </div>
         <div className="edit-meal-section">
@@ -2889,10 +2896,12 @@ function LocalRecipeModal({
 // ─── StatsScreen ──────────────────────────────────────────────────────────────
 
 function StatsScreen() {
+  const [tab, setTab] = useState<"meals" | "sides" | "contexts">("meals");
   const [q, setQ] = useState("");
   const [results, setResults] = useState<HistoryResult[]>([]);
   const [searching, setSearching] = useState(false);
   const [freq, setFreq] = useState<FreqEntry[]>([]);
+  const [sideFreq, setSideFreq] = useState<SideFreqEntry[]>([]);
   const [contextStats, setContextStats] = useState<ContextStats | null>(null);
   const [freqWeeks, setFreqWeeks] = useState(12);
 
@@ -2900,6 +2909,7 @@ function StatsScreen() {
     loadStats(freqWeeks)
       .then((stats) => {
         setFreq(stats.freq);
+        setSideFreq(stats.sideFreq);
         setContextStats(stats.contextStats);
       })
       .catch(() => notify("Impossible de charger les statistiques."));
@@ -2917,134 +2927,208 @@ function StatsScreen() {
   }
 
   const maxCount = Math.max(...freq.map((f) => f.count), 1);
+  const maxSideCount = Math.max(...sideFreq.map((f) => f.count), 1);
 
   return (
     <div className="screen-pad">
-      <div className="settings-section">
-        <h2>Rechercher dans l'historique</h2>
-        <div className="search-bar stats-search">
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="ex. chili, poulet, saumon…"
-            onKeyDown={(e) => e.key === "Enter" && search()}
-          />
-          <button className="btn btn-primary" onClick={search}>
-            <Search size={15} />
+      <ul className="segmented stats-tabs">
+        <li>
+          <button className={tab === "meals" ? "active" : ""} onClick={() => setTab("meals")}>
+            Repas
           </button>
-        </div>
-        {results.length > 0 && (
-          <div>
-            {results.map((r) => (
-              <div key={r.id} className="history-result">
-                <div className="hr-name">{r.recipe_name}</div>
-                <div className="hr-date">{fmtDateFull(r.slot_date)}</div>
-              </div>
-            ))}
-          </div>
-        )}
-        {q && results.length === 0 && !searching && (
-          <div className="empty-state"><p>Aucun résultat pour « {q} »</p></div>
-        )}
-      </div>
+        </li>
+        <li>
+          <button className={tab === "sides" ? "active" : ""} onClick={() => setTab("sides")}>
+            Accompagnements
+          </button>
+        </li>
+        <li>
+          <button className={tab === "contexts" ? "active" : ""} onClick={() => setTab("contexts")}>
+            Sorties
+          </button>
+        </li>
+      </ul>
 
-      <div className="settings-section">
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
-          <h2 style={{ margin: 0 }}>Fréquence des repas</h2>
-          <div className="filter-chips" style={{ margin: 0 }}>
-            {[4, 8, 12].map((w) => (
-              <button
-                key={w}
-                className={`filter-chip${freqWeeks === w ? " active" : ""}`}
-                onClick={() => setFreqWeeks(w)}
-              >
-                {w} sem.
+      {tab === "meals" && (
+        <>
+          <div className="settings-section">
+            <h2>Rechercher dans l'historique</h2>
+            <div className="search-bar stats-search">
+              <input
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="ex. chili, poulet, saumon…"
+                onKeyDown={(e) => e.key === "Enter" && search()}
+              />
+              <button className="btn btn-primary" onClick={search}>
+                <Search size={15} />
               </button>
-            ))}
-          </div>
-        </div>
-        {freq.length === 0 ? (
-          <div className="empty-state"><p>Pas encore de données</p></div>
-        ) : (
-          <table className="freq-table">
-            <thead>
-              <tr>
-                <th>Repas</th>
-                <th>Fréquence</th>
-                <th>Dernière fois</th>
-              </tr>
-            </thead>
-            <tbody>
-              {freq.map((f) => (
-                <tr key={f.recipe_name}>
-                  <td>{f.recipe_name}</td>
-                  <td style={{ width: 120 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      <div
-                        className="freq-bar"
-                        style={{ width: `${(f.count / maxCount) * 80}px` }}
-                      />
-                      <span style={{ fontSize: 12, color: "var(--muted)" }}>{f.count}×</span>
-                    </div>
-                  </td>
-                  <td style={{ fontSize: 12, color: "var(--muted)" }}>
-                    {weeksAgo(f.last_date)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      <div className="settings-section">
-        <h2>Sorties et réceptions</h2>
-        {contextStats && (
-          <>
-            <div className="stats-summary-grid">
-              <div className="stats-summary-item">
-                <strong>{contextStats.summary.away ?? 0}</strong>
-                <span>chez proches/amis</span>
-              </div>
-              <div className="stats-summary-item">
-                <strong>{contextStats.summary.hosting ?? 0}</strong>
-                <span>réceptions</span>
-              </div>
-              <div className="stats-summary-item">
-                <strong>{contextStats.summary.restaurant ?? 0}</strong>
-                <span>restaurants</span>
-              </div>
             </div>
-            {[
-              ["away", "Chez qui on mange"],
-              ["hosting", "Qui on reçoit"],
-              ["restaurant", "Restaurants"],
-            ].map(([kind, title]) => {
-              const rows = contextStats.by_kind[kind as keyof ContextStats["by_kind"]] ?? [];
-              return (
-                <div key={kind} style={{ marginTop: 14 }}>
-                  <div className="favorites-label">{title}</div>
-                  {rows.length === 0 ? (
-                    <div className="recipe-last">Pas encore de données</div>
-                  ) : (
-                    <table className="freq-table">
-                      <tbody>
-                        {rows.map((r) => (
-                          <tr key={`${r.kind}-${r.context_id ?? r.name}`}>
-                            <td>{r.name}</td>
-                            <td style={{ width: 70 }}>{r.count}×</td>
-                            <td style={{ fontSize: 12, color: "var(--muted)" }}>{weeksAgo(r.last_date)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
+            {results.length > 0 && (
+              <div>
+                {results.map((r) => (
+                  <div key={r.id} className="history-result">
+                    <div className="hr-name">{r.recipe_name}</div>
+                    <div className="hr-date">{fmtDateFull(r.slot_date)}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {q && results.length === 0 && !searching && (
+              <div className="empty-state"><p>Aucun résultat pour « {q} »</p></div>
+            )}
+          </div>
+
+          <div className="settings-section">
+            <StatsSectionHeader title="Fréquence des repas" weeks={freqWeeks} onWeeksChange={setFreqWeeks} />
+            {freq.length === 0 ? (
+              <div className="empty-state"><p>Pas encore de données</p></div>
+            ) : (
+              <table className="freq-table">
+                <thead>
+                  <tr>
+                    <th>Repas</th>
+                    <th>Fréquence</th>
+                    <th>Dernière fois</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {freq.map((f) => (
+                    <tr key={f.recipe_name}>
+                      <td>{f.recipe_name}</td>
+                      <td style={{ width: 120 }}>
+                        <FrequencyBar count={f.count} maxCount={maxCount} />
+                      </td>
+                      <td style={{ fontSize: 12, color: "var(--muted)" }}>
+                        {weeksAgo(f.last_date)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </>
+      )}
+
+      {tab === "sides" && (
+        <div className="settings-section">
+          <StatsSectionHeader title="Fréquence des accompagnements" weeks={freqWeeks} onWeeksChange={setFreqWeeks} />
+          {sideFreq.length === 0 ? (
+            <div className="empty-state"><p>Pas encore de données</p></div>
+          ) : (
+            <table className="freq-table">
+              <thead>
+                <tr>
+                  <th>Accompagnement</th>
+                  <th>Fréquence</th>
+                  <th>Dernière fois</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sideFreq.map((f) => (
+                  <tr key={f.side_id ?? f.name}>
+                    <td>{f.name}</td>
+                    <td style={{ width: 120 }}>
+                      <FrequencyBar count={f.count} maxCount={maxSideCount} />
+                    </td>
+                    <td style={{ fontSize: 12, color: "var(--muted)" }}>
+                      {weeksAgo(f.last_date)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {tab === "contexts" && (
+        <div className="settings-section">
+          <StatsSectionHeader title="Sorties et réceptions" weeks={freqWeeks} onWeeksChange={setFreqWeeks} />
+          {contextStats && (
+            <>
+              <div className="stats-summary-grid">
+                <div className="stats-summary-item">
+                  <strong>{contextStats.summary.away ?? 0}</strong>
+                  <span>chez proches/amis</span>
                 </div>
-              );
-            })}
-          </>
-        )}
+                <div className="stats-summary-item">
+                  <strong>{contextStats.summary.hosting ?? 0}</strong>
+                  <span>réceptions</span>
+                </div>
+                <div className="stats-summary-item">
+                  <strong>{contextStats.summary.restaurant ?? 0}</strong>
+                  <span>restaurants</span>
+                </div>
+              </div>
+              {[
+                ["away", "Chez qui on mange"],
+                ["hosting", "Qui on reçoit"],
+                ["restaurant", "Restaurants"],
+              ].map(([kind, title]) => {
+                const rows = contextStats.by_kind[kind as keyof ContextStats["by_kind"]] ?? [];
+                return (
+                  <div key={kind} style={{ marginTop: 14 }}>
+                    <div className="favorites-label">{title}</div>
+                    {rows.length === 0 ? (
+                      <div className="recipe-last">Pas encore de données</div>
+                    ) : (
+                      <table className="freq-table">
+                        <tbody>
+                          {rows.map((r) => (
+                            <tr key={`${r.kind}-${r.context_id ?? r.name}`}>
+                              <td>{r.name}</td>
+                              <td style={{ width: 70 }}>{r.count}×</td>
+                              <td style={{ fontSize: 12, color: "var(--muted)" }}>{weeksAgo(r.last_date)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                );
+              })}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StatsSectionHeader({
+  title,
+  weeks,
+  onWeeksChange,
+}: {
+  title: string;
+  weeks: number;
+  onWeeksChange: (weeks: number) => void;
+}) {
+  return (
+    <div className="stats-section-header">
+      <h2>{title}</h2>
+      <div className="filter-chips">
+        {[4, 8, 12].map((w) => (
+          <button
+            key={w}
+            className={`filter-chip${weeks === w ? " active" : ""}`}
+            onClick={() => onWeeksChange(w)}
+          >
+            {w} sem.
+          </button>
+        ))}
       </div>
+    </div>
+  );
+}
+
+function FrequencyBar({ count, maxCount }: { count: number; maxCount: number }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <div className="freq-bar" style={{ width: `${(count / maxCount) * 80}px` }} />
+      <span style={{ fontSize: 12, color: "var(--muted)" }}>{count}×</span>
     </div>
   );
 }

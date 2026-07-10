@@ -804,7 +804,21 @@ body {
 }
 .history-result .hr-name { font-weight: 600; font-size: 14px; }
 .history-result .hr-date { font-size: 12px; color: var(--muted); margin-top: 2px; }
-
+.stats-tabs { margin-bottom: 14px; }
+.stats-section-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.stats-section-header h2 {
+  margin: 0;
+  flex: 1;
+}
+.stats-section-header .filter-chips {
+  margin: 0;
+}
 .freq-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .freq-table th { text-align: left; font-weight: 600; padding: 6px 8px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; border-bottom: 1px solid var(--line); }
 .freq-table td { padding: 8px 8px; border-bottom: 1px solid var(--line); }
