@@ -1194,6 +1194,14 @@ def api_list_inventory_products(
     return get_inventory_products()
 
 
+@app.post("/api/inventory-products/refresh")
+def api_refresh_inventory_products(
+    actor: Actor = Depends(require_permission("settings.manage")),
+) -> list[dict]:
+    """Force la relecture des produits actifs depuis inventaire_familial."""
+    return get_inventory_products(force=True)
+
+
 @app.get("/api/ingredient-mappings")
 def api_list_ingredient_mappings(
     status: str | None = None,
@@ -1225,7 +1233,7 @@ def api_sync_mealie_ingredients(
     if not mealie_ok():
         return {"imported": 0}
     texts: set[str] = set()
-    for r in get_recipes():
+    for r in get_recipes(force=True):
         detail = get_recipe(r.get("slug", ""))
         if not detail:
             continue

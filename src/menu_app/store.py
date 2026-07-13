@@ -1204,6 +1204,12 @@ def delete_canonical_ingredient(ingredient_id: str) -> None:
     """Supprime l'ingrédient canonique et purge les références orphelines dans les
     ingredients_json des recettes locales (pas de FK SQL possible sur du JSON)."""
     with connect() as db:
+        db.execute(
+            """UPDATE mealie_ingredient_mappings
+               SET canonical_ingredient_id=NULL, status='pending', confirmed_at='', confirmed_by=''
+               WHERE canonical_ingredient_id=?""",
+            (ingredient_id,),
+        )
         db.execute("DELETE FROM canonical_ingredients WHERE id=?", (ingredient_id,))
         for row in db.execute("SELECT id, ingredients_json FROM local_recipes").fetchall():
             ingredients = json.loads(row["ingredients_json"] or "[]")

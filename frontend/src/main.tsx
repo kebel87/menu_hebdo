@@ -557,11 +557,25 @@ function loadInventoryProducts(): Promise<InventoryProduct[]> {
   return inventoryProductsPromise;
 }
 
+function refreshInventoryProducts(): Promise<InventoryProduct[]> {
+  inventoryProductsCache = null;
+  inventoryProductsPromise = api<InventoryProduct[]>("/api/inventory-products/refresh", { method: "POST" })
+    .then((products) => {
+      inventoryProductsCache = byName(products);
+      return inventoryProductsCache;
+    })
+    .finally(() => { inventoryProductsPromise = null; });
+  return inventoryProductsPromise;
+}
+
 function prefetchSettings(canAdmin: boolean) {
   loadNotificationConfig().catch(() => undefined);
   if (!canAdmin) return;
   loadTagMappings().catch(() => undefined);
   loadCanonicalTags().catch(() => undefined);
+  loadIngredientMappings().catch(() => undefined);
+  loadCanonicalIngredients().catch(() => undefined);
+  loadIngredientLinks().catch(() => undefined);
   loadChildren().catch(() => undefined);
   loadFamilyMembers().catch(() => undefined);
   loadMealContexts().catch(() => undefined);
@@ -2559,7 +2573,7 @@ function RecipeDetailModal({
                   onChange={(e) => updateIngredient(i, { canonical_ingredient_id: e.target.value || null })}
                   className="ingredient-link"
                 >
-                  <option value="">— Lien inventaire —</option>
+                  <option value="">— Ingrédient Menu Hebdo —</option>
                   {allIngredients.map((ci) => (
                     <option key={ci.id} value={ci.id}>{ci.name}</option>
                   ))}
@@ -2574,7 +2588,7 @@ function RecipeDetailModal({
             </button>
             {ingredients.length > 0 && !ingredients.some((i) => i.canonical_ingredient_id) && (
               <div className="recipe-last" style={{ marginTop: 6 }}>
-                Reliez au moins un ingrédient (menu « — Lien inventaire — ») pour activer le calcul de disponibilité.
+                Reliez au moins un ingrédient Menu Hebdo pour activer le calcul de disponibilité.
               </div>
             )}
           </section>
@@ -2873,7 +2887,7 @@ function LocalRecipeModal({
                 onChange={(e) => updateIngredient(i, { canonical_ingredient_id: e.target.value || null })}
                 style={{ flex: 2, fontSize: 12 }}
               >
-                <option value="">— Lien inventaire —</option>
+                <option value="">— Ingrédient Menu Hebdo —</option>
                 {allIngredients.map((ci) => (
                   <option key={ci.id} value={ci.id}>{ci.name}</option>
                 ))}
@@ -3331,10 +3345,7 @@ function SettingsScreen({ canAdmin }: { canAdmin: boolean }) {
         </>
       )}
       {canAdmin && tab === "inventory" && (
-        <>
-          <IngredientMappingsSection />
-          <CanonicalIngredientsSection />
-        </>
+        <IngredientAssociationsSection />
       )}
       {canAdmin && tab === "contexts" && <MealContextsSection />}
       {tab === "notifications" && <NotificationsSection />}
@@ -3576,120 +3587,58 @@ function CanonicalTagsSection() {
   );
 }
 
-function IngredientMappingsSection() {
-  const [mappings, setMappings] = useState<IngredientMapping[]>([]);
-  const [ingredients, setIngredients] = useState<CanonicalIngredient[]>([]);
-  const [syncing, setSyncing] = useState(false);
-
-  useEffect(() => {
-    loadIngredientMappings().then(setMappings).catch(() => notify("Impossible de charger les mappings d'ingrédients."));
-    loadCanonicalIngredients().then(setIngredients).catch(() => notify("Impossible de charger les ingrédients canoniques."));
-  }, []);
-
-  async function confirm(mapping: IngredientMapping, canonicalId: string | undefined, status: string) {
-    const updated = await api<IngredientMapping>(`/api/ingredient-mappings/${encodeURIComponent(mapping.mealie_ingredient_text)}`, {
-      method: "PUT",
-      body: JSON.stringify({ canonical_ingredient_id: canonicalId, status }),
-    });
-    setMappings((prev) => prev.map((m) => (m.mealie_ingredient_text === mapping.mealie_ingredient_text ? updated : m)));
-    replaceIngredientMappingsCache((prev) => prev.map((m) => (m.mealie_ingredient_text === mapping.mealie_ingredient_text ? updated : m)));
-    invalidateRecipeListCache();
-  }
-
-  async function syncIngredients() {
-    setSyncing(true);
-    try {
-      await api("/api/ingredient-mappings/sync", { method: "POST" });
-      ingredientMappingsCache = null;
-      const updated = await loadIngredientMappings();
-      setMappings(updated);
-      invalidateRecipeListCache();
-    } catch {
-      notify("Impossible de synchroniser les ingrédients Mealie.");
-    } finally {
-      setSyncing(false);
-    }
-  }
-
-  const pending = mappings.filter((m) => m.status === "pending");
-  const rest = mappings.filter((m) => m.status !== "pending");
-
-  return (
-    <div className="settings-section">
-      <div style={{ display: "flex", alignItems: "center", marginBottom: 10 }}>
-        <h2 style={{ flex: 1, margin: 0 }}>Ingrédients Mealie → Ingrédients canoniques</h2>
-        <button className="btn btn-secondary" onClick={syncIngredients} disabled={syncing}>
-          <RefreshCw size={13} /> {syncing ? "…" : "Sync"}
-        </button>
-      </div>
-      {pending.length > 0 && (
-        <div style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: 12, color: "var(--amber)", fontWeight: 600, marginBottom: 6 }}>
-            {pending.length} ingrédient(s) en attente de confirmation
-          </div>
-          {pending.map((m) => (
-            <div key={m.mealie_ingredient_text} className="tag-mapping-row">
-              <span className="status-dot pending" />
-              <span className="mealie-tag">{m.mealie_ingredient_text}</span>
-              <select
-                style={{ fontSize: 12, padding: "3px 6px", border: "1px solid var(--line)", borderRadius: 4 }}
-                defaultValue={m.canonical_ingredient_id ?? ""}
-                onChange={(e) => confirm(m, e.target.value || undefined, "confirmed")}
-              >
-                <option value="">— Ignorer —</option>
-                {ingredients.map((i) => (
-                  <option key={i.id} value={i.id}>{i.name}</option>
-                ))}
-              </select>
-              <button
-                className="btn btn-ghost"
-                style={{ fontSize: 11 }}
-                onClick={() => confirm(m, undefined, "ignored")}
-              >
-                Ignorer
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-      {rest.length > 0 && (
-        <div>
-          {rest.map((m) => (
-            <div key={m.mealie_ingredient_text} className="tag-mapping-row">
-              <span className={`status-dot ${m.status}`} />
-              <span className="mealie-tag">{m.mealie_ingredient_text}</span>
-              <span style={{ fontSize: 12, color: "var(--muted)" }}>
-                {m.canonical_ingredient_name ?? "—"}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-      {mappings.length === 0 && (
-        <div className="empty-state"><p>Aucun ingrédient Mealie importé — clique Sync pour lancer une première récolte.</p></div>
-      )}
-    </div>
-  );
+function enrichIngredientMapping(mapping: IngredientMapping, ingredients: CanonicalIngredient[]): IngredientMapping {
+  if (mapping.status !== "confirmed" || !mapping.canonical_ingredient_id) return mapping;
+  return {
+    ...mapping,
+    canonical_ingredient_name:
+      mapping.canonical_ingredient_name ??
+      ingredients.find((ingredient) => ingredient.id === mapping.canonical_ingredient_id)?.name,
+  };
 }
 
-function CanonicalIngredientsSection() {
+function IngredientAssociationsSection() {
   const [ingredients, setIngredients] = useState<CanonicalIngredient[]>([]);
+  const [mappings, setMappings] = useState<IngredientMapping[]>([]);
   const [links, setLinks] = useState<IngredientInventoryLink[]>([]);
   const [products, setProducts] = useState<InventoryProduct[]>([]);
   const [newName, setNewName] = useState("");
-  const [linkPicker, setLinkPicker] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [centerQuery, setCenterQuery] = useState("");
+  const [mealieQuery, setMealieQuery] = useState("");
+  const [inventoryQuery, setInventoryQuery] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [syncingMealie, setSyncingMealie] = useState(false);
+  const [syncingInventory, setSyncingInventory] = useState(false);
 
   useEffect(() => {
-    loadCanonicalIngredients()
-      .then(setIngredients)
-      .catch(() => notify("Impossible de charger les ingrédients canoniques."));
-    loadIngredientLinks()
-      .then(setLinks)
-      .catch(() => notify("Impossible de charger les liens d'inventaire."));
-    loadInventoryProducts()
-      .then(setProducts)
-      .catch(() => notify("Impossible de charger le catalogue d'inventaire."));
+    loadAll();
   }, []);
+
+  async function loadAll() {
+    setLoading(true);
+    try {
+      const [loadedIngredients, loadedMappings, loadedLinks, loadedProducts] = await Promise.all([
+        loadCanonicalIngredients(),
+        loadIngredientMappings(),
+        loadIngredientLinks(),
+        loadInventoryProducts(),
+      ]);
+      setIngredients(loadedIngredients);
+      setMappings(loadedMappings.map((mapping) => enrichIngredientMapping(mapping, loadedIngredients)));
+      setLinks(loadedLinks);
+      setProducts(loadedProducts);
+      setSelectedId((current) => current ?? loadedIngredients[0]?.id ?? null);
+    } catch {
+      notify("Impossible de charger les associations d'ingrédients.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function selectedIngredientName() {
+    return ingredients.find((ingredient) => ingredient.id === selectedId)?.name ?? "un ingrédient Menu Hebdo";
+  }
 
   async function addIngredient() {
     if (!newName.trim()) return;
@@ -3700,6 +3649,7 @@ function CanonicalIngredientsSection() {
     setIngredients((prev) => byName([...prev, ing]));
     replaceCanonicalIngredientsCache((prev) => [...prev, ing]);
     invalidateRecipeListCache();
+    setSelectedId(ing.id);
     setNewName("");
   }
 
@@ -3710,6 +3660,7 @@ function CanonicalIngredientsSection() {
       body: JSON.stringify({ name: name.trim() }),
     });
     setIngredients((prev) => byName(prev.map((x) => (x.id === id ? ing : x))));
+    setMappings((prev) => prev.map((mapping) => enrichIngredientMapping(mapping, ingredients.map((x) => (x.id === id ? ing : x)))));
     replaceCanonicalIngredientsCache((prev) => prev.map((x) => (x.id === id ? ing : x)));
     invalidateRecipeListCache();
   }
@@ -3718,9 +3669,15 @@ function CanonicalIngredientsSection() {
     await api(`/api/canonical-ingredients/${id}`, { method: "DELETE" });
     setIngredients((prev) => prev.filter((x) => x.id !== id));
     setLinks((prev) => prev.filter((l) => l.canonical_ingredient_id !== id));
+    setMappings((prev) => prev.map((mapping) => (
+      mapping.canonical_ingredient_id === id
+        ? { ...mapping, canonical_ingredient_id: undefined, canonical_ingredient_name: undefined, status: "pending" }
+        : mapping
+    )));
     replaceCanonicalIngredientsCache((prev) => prev.filter((x) => x.id !== id));
     replaceIngredientLinksCache((prev) => prev.filter((l) => l.canonical_ingredient_id !== id));
     invalidateRecipeListCache();
+    setSelectedId((current) => current === id ? ingredients.find((x) => x.id !== id)?.id ?? null : current);
   }
 
   async function addLink(canonicalIngredientId: string, product: InventoryProduct) {
@@ -3733,10 +3690,15 @@ function CanonicalIngredientsSection() {
         domain: product.domain,
       }),
     });
-    setLinks((prev) => [...prev.filter((l) => l.id !== link.id), { ...link, is_live: true }]);
-    replaceIngredientLinksCache((prev) => [...prev.filter((l) => l.id !== link.id), { ...link, is_live: true }]);
+    setLinks((prev) => [
+      ...prev.filter((l) => l.id !== link.id && l.inventory_product_id !== link.inventory_product_id),
+      { ...link, is_live: true },
+    ]);
+    replaceIngredientLinksCache((prev) => [
+      ...prev.filter((l) => l.id !== link.id && l.inventory_product_id !== link.inventory_product_id),
+      { ...link, is_live: true },
+    ]);
     invalidateRecipeListCache();
-    setLinkPicker(null);
   }
 
   async function removeLink(linkId: string) {
@@ -3746,89 +3708,298 @@ function CanonicalIngredientsSection() {
     invalidateRecipeListCache();
   }
 
-  return (
-    <div className="settings-section">
-      <h2>Ingrédients canoniques</h2>
-      <div style={{ marginBottom: 8 }}>
-        {ingredients.map((ing) => {
-          const ingLinks = links.filter((l) => l.canonical_ingredient_id === ing.id);
-          const linkedProductIds = new Set(ingLinks.map((l) => l.inventory_product_id));
-          return (
-            <div key={ing.id} style={{ marginBottom: 10, paddingBottom: 10, borderBottom: "1px solid var(--line)" }}>
-              <div className="canonical-tag-row">
-                <input
-                  defaultValue={ing.name}
-                  key={ing.id + ing.name}
-                  onBlur={(e) => e.target.value !== ing.name && renameIngredient(ing.id, e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
-                  className="tag-name-input"
-                />
-                <button
-                  className="btn-icon"
-                  onClick={() => setLinkPicker(linkPicker === ing.id ? null : ing.id)}
-                  title="Lier un item d'inventaire"
-                >
-                  <Plus size={13} />
-                </button>
-                <button className="btn-icon" onClick={() => deleteIngredient(ing.id)} title="Supprimer">
-                  <X size={13} />
-                </button>
-              </div>
-              {ingLinks.length > 0 && (
-                <div style={{ marginTop: 4, marginLeft: 4 }}>
-                  {ingLinks.map((l) => (
-                    <div
-                      key={l.id}
-                      style={{
-                        display: "flex", alignItems: "center", gap: 6, fontSize: 12,
-                        color: l.is_live ? "var(--muted)" : "var(--red)", padding: "2px 0",
-                      }}
-                    >
-                      <span style={{ flex: 1 }}>
-                        {l.inventory_product_name}
-                        {!l.is_live && " — introuvable dans l'inventaire actuel"}
-                      </span>
-                      <button className="btn-icon" onClick={() => removeLink(l.id)} title="Retirer le lien">
-                        <X size={11} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {linkPicker === ing.id && (
-                <div style={{ marginTop: 6 }}>
-                  <select
-                    style={{ fontSize: 12, padding: "3px 6px", border: "1px solid var(--line)", borderRadius: 4, width: "100%" }}
-                    defaultValue=""
-                    onChange={(e) => {
-                      const product = products.find((p) => p.product_id === e.target.value);
-                      if (product) addLink(ing.id, product);
-                    }}
-                  >
-                    <option value="" disabled>— Choisir un item d'inventaire —</option>
-                    {products.filter((p) => !linkedProductIds.has(p.product_id)).map((p) => (
-                      <option key={p.product_id} value={p.product_id}>
-                        {p.name} ({p.quantity} {p.unit})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-            </div>
-          );
-        })}
-        {ingredients.length === 0 && (
-          <div className="empty-state"><p>Aucun ingrédient canonique</p></div>
+  async function updateMapping(mapping: IngredientMapping, canonicalId: string | undefined, status: IngredientMapping["status"]) {
+    const updated = await api<IngredientMapping>(`/api/ingredient-mappings/${encodeURIComponent(mapping.mealie_ingredient_text)}`, {
+      method: "PUT",
+      body: JSON.stringify({ canonical_ingredient_id: canonicalId, status }),
+    });
+    const enriched = enrichIngredientMapping(updated, ingredients);
+    setMappings((prev) => prev.map((m) => (m.mealie_ingredient_text === mapping.mealie_ingredient_text ? enriched : m)));
+    replaceIngredientMappingsCache((prev) => prev.map((m) => (m.mealie_ingredient_text === mapping.mealie_ingredient_text ? enriched : m)));
+    invalidateRecipeListCache();
+  }
+
+  async function syncMealieIngredients() {
+    setSyncingMealie(true);
+    try {
+      const result = await api<{ imported: number }>("/api/ingredient-mappings/sync", { method: "POST" });
+      ingredientMappingsCache = null;
+      const updated = await loadIngredientMappings();
+      setMappings(updated.map((mapping) => enrichIngredientMapping(mapping, ingredients)));
+      invalidateRecipeListCache();
+      notify(`${result.imported} ingrédient(s) Mealie synchronisé(s).`, "info");
+    } catch {
+      notify("Impossible de synchroniser les ingrédients Mealie.");
+    } finally {
+      setSyncingMealie(false);
+    }
+  }
+
+  async function syncInventoryProducts() {
+    setSyncingInventory(true);
+    try {
+      const refreshedProducts = await refreshInventoryProducts();
+      ingredientLinksCache = null;
+      const refreshedLinks = await loadIngredientLinks();
+      setProducts(refreshedProducts);
+      setLinks(refreshedLinks);
+      notify(`${refreshedProducts.length} item(s) d'inventaire synchronisé(s).`, "info");
+    } catch {
+      notify("Impossible de synchroniser l'inventaire.");
+    } finally {
+      setSyncingInventory(false);
+    }
+  }
+
+  const selected = ingredients.find((ingredient) => ingredient.id === selectedId) ?? null;
+  const ingredientById = new Map(ingredients.map((ingredient) => [ingredient.id, ingredient]));
+  const linkByProductId = new Map(links.map((link) => [link.inventory_product_id, link]));
+  const selectedMealieCount = mappings.filter((mapping) => mapping.canonical_ingredient_id === selectedId && mapping.status === "confirmed").length;
+  const selectedInventoryCount = links.filter((link) => link.canonical_ingredient_id === selectedId).length;
+  const filteredIngredients = ingredients.filter((ingredient) => searchKey(ingredient.name).includes(searchKey(centerQuery)));
+  const selectedMappings = mappings
+    .filter((mapping) => mapping.status === "confirmed" && mapping.canonical_ingredient_id === selectedId)
+    .filter((mapping) => searchKey(mapping.mealie_ingredient_text).includes(searchKey(mealieQuery)));
+  const pendingMappings = mappings
+    .filter((mapping) => mapping.status === "pending")
+    .filter((mapping) => searchKey(mapping.mealie_ingredient_text).includes(searchKey(mealieQuery)));
+  const otherMappings = mappings
+    .filter((mapping) => mapping.status === "confirmed" && mapping.canonical_ingredient_id !== selectedId)
+    .filter((mapping) => searchKey(mapping.mealie_ingredient_text).includes(searchKey(mealieQuery)));
+  const ignoredMappings = mappings
+    .filter((mapping) => mapping.status === "ignored")
+    .filter((mapping) => searchKey(mapping.mealie_ingredient_text).includes(searchKey(mealieQuery)));
+  const selectedLinks = links.filter((link) => link.canonical_ingredient_id === selectedId);
+  const filteredProducts = products.filter((product) => searchKey(product.name).includes(searchKey(inventoryQuery)));
+  const availableProducts = filteredProducts.filter((product) => (
+    linkByProductId.get(product.product_id)?.canonical_ingredient_id !== selectedId
+  ));
+
+  function renderMappingRow(mapping: IngredientMapping, mode: "selected" | "pending" | "other" | "ignored") {
+    const targetName = mapping.canonical_ingredient_name ?? (
+      mapping.canonical_ingredient_id ? ingredientById.get(mapping.canonical_ingredient_id)?.name : undefined
+    );
+    return (
+      <div key={mapping.mealie_ingredient_text} className={`association-row association-row-${mode}`}>
+        <span className={`status-dot ${mapping.status}`} />
+        <div className="association-row-main">
+          <span className="association-row-title">{mapping.mealie_ingredient_text}</span>
+          {targetName && <span className="association-row-subtitle">vers {targetName}</span>}
+          {mode === "ignored" && <span className="association-row-subtitle">ignoré durablement</span>}
+        </div>
+        {mode !== "selected" && selected && (
+          <button
+            className="btn btn-secondary btn-xs"
+            type="button"
+            onClick={() => updateMapping(mapping, selected.id, "confirmed")}
+          >
+            Associer
+          </button>
+        )}
+        {mode !== "ignored" && (
+          <button
+            className="btn-icon"
+            type="button"
+            onClick={() => updateMapping(mapping, undefined, "ignored")}
+            title="Ignorer durablement"
+          >
+            <EyeOff size={13} />
+          </button>
+        )}
+        {mode === "selected" && (
+          <button
+            className="btn-icon"
+            type="button"
+            onClick={() => updateMapping(mapping, undefined, "pending")}
+            title="Retirer l'association"
+          >
+            <X size={13} />
+          </button>
+        )}
+        {mode === "ignored" && (
+          <button
+            className="btn btn-secondary btn-xs"
+            type="button"
+            onClick={() => updateMapping(mapping, undefined, "pending")}
+          >
+            Restaurer
+          </button>
         )}
       </div>
-      <div className="sides-add">
-        <input
-          value={newName}
-          onChange={(e) => setNewName(e.target.value)}
-          placeholder="Nouvel ingrédient…"
-          onKeyDown={(e) => e.key === "Enter" && addIngredient()}
-        />
-        <button onClick={addIngredient}><Plus size={14} /></button>
+    );
+  }
+
+  return (
+    <div className="settings-section ingredient-associations">
+      <div className="settings-section-header">
+        <div>
+          <h2>Associations ingrédients</h2>
+          <p>Relie les ingrédients Mealie et les items d'inventaire autour des ingrédients Menu Hebdo.</p>
+        </div>
+        <div className="association-sync-actions">
+          <button className="btn btn-secondary" type="button" onClick={syncMealieIngredients} disabled={syncingMealie}>
+            <RefreshCw size={13} /> {syncingMealie ? "…" : "Sync Mealie"}
+          </button>
+          <button className="btn btn-secondary" type="button" onClick={syncInventoryProducts} disabled={syncingInventory}>
+            <RefreshCw size={13} /> {syncingInventory ? "…" : "Sync inventaire"}
+          </button>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="empty-state"><RefreshCw size={24} className="spin" /></div>
+      ) : (
+        <div className="association-board">
+          <section className="association-column">
+            <div className="association-column-header">
+              <h3>Mealie</h3>
+              <span>{mappings.filter((mapping) => mapping.status === "pending").length} à traiter</span>
+            </div>
+            <div className="association-search">
+              <Search size={14} />
+              <input value={mealieQuery} onChange={(e) => setMealieQuery(e.target.value)} placeholder="Rechercher Mealie…" />
+            </div>
+
+            <AssociationGroup title={`Associés à ${selectedIngredientName()}`} count={selectedMappings.length}>
+              {selectedMappings.map((mapping) => renderMappingRow(mapping, "selected"))}
+            </AssociationGroup>
+            <AssociationGroup title="Non associés" count={pendingMappings.length}>
+              {pendingMappings.map((mapping) => renderMappingRow(mapping, "pending"))}
+            </AssociationGroup>
+            <AssociationGroup title="Associés ailleurs" count={otherMappings.length}>
+              {otherMappings.map((mapping) => renderMappingRow(mapping, "other"))}
+            </AssociationGroup>
+            <AssociationGroup title="Ignorés" count={ignoredMappings.length}>
+              {ignoredMappings.map((mapping) => renderMappingRow(mapping, "ignored"))}
+            </AssociationGroup>
+          </section>
+
+          <section className="association-column association-column-center">
+            <div className="association-column-header">
+              <h3>Ingrédients Menu Hebdo</h3>
+              <span>{ingredients.length}</span>
+            </div>
+            <div className="association-search">
+              <Search size={14} />
+              <input value={centerQuery} onChange={(e) => setCenterQuery(e.target.value)} placeholder="Rechercher…" />
+            </div>
+            <div className="association-list association-list-center">
+              {filteredIngredients.map((ingredient) => {
+                const mealieCount = mappings.filter((mapping) => mapping.status === "confirmed" && mapping.canonical_ingredient_id === ingredient.id).length;
+                const inventoryCount = links.filter((link) => link.canonical_ingredient_id === ingredient.id).length;
+                return (
+                  <button
+                    key={ingredient.id}
+                    type="button"
+                    className={`ingredient-pivot-row${ingredient.id === selectedId ? " active" : ""}`}
+                    onClick={() => setSelectedId(ingredient.id)}
+                  >
+                    <span className="ingredient-pivot-name">{ingredient.name}</span>
+                    <span className="ingredient-pivot-counts">
+                      {mealieCount} Mealie · {inventoryCount} inventaire
+                    </span>
+                  </button>
+                );
+              })}
+              {filteredIngredients.length === 0 && <div className="association-empty">Aucun ingrédient</div>}
+            </div>
+            <div className="association-create-row">
+              <input
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder="Nouvel ingrédient Menu Hebdo…"
+                onKeyDown={(e) => e.key === "Enter" && addIngredient()}
+              />
+              <button className="btn-icon" type="button" onClick={addIngredient} title="Créer">
+                <Plus size={14} />
+              </button>
+            </div>
+            {selected && (
+              <div className="association-selected-editor">
+                <label>Ingrédient sélectionné</label>
+                <div className="canonical-tag-row">
+                  <input
+                    defaultValue={selected.name}
+                    key={selected.id + selected.name}
+                    onBlur={(e) => e.target.value !== selected.name && renameIngredient(selected.id, e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+                    className="tag-name-input"
+                  />
+                  <button className="btn-icon" type="button" onClick={() => deleteIngredient(selected.id)} title="Supprimer">
+                    <X size={13} />
+                  </button>
+                </div>
+                <div className="association-selected-stats">
+                  <span>{selectedMealieCount} ingrédient(s) Mealie</span>
+                  <span>{selectedInventoryCount} item(s) inventaire</span>
+                </div>
+              </div>
+            )}
+          </section>
+
+          <section className="association-column">
+            <div className="association-column-header">
+              <h3>Inventaire familial</h3>
+              <span>{products.length} items</span>
+            </div>
+            <div className="association-search">
+              <Search size={14} />
+              <input value={inventoryQuery} onChange={(e) => setInventoryQuery(e.target.value)} placeholder="Rechercher inventaire…" />
+            </div>
+            <AssociationGroup title={`Associés à ${selectedIngredientName()}`} count={selectedLinks.length}>
+              {selectedLinks.map((link) => (
+                <div key={link.id} className={`association-row${link.is_live ? "" : " association-row-missing"}`}>
+                  <span className={`status-dot ${link.is_live ? "confirmed" : "ignored"}`} />
+                  <div className="association-row-main">
+                    <span className="association-row-title">{link.inventory_product_name}</span>
+                    <span className="association-row-subtitle">{link.is_live ? link.domain : "introuvable dans l'inventaire actuel"}</span>
+                  </div>
+                  <button className="btn-icon" type="button" onClick={() => removeLink(link.id)} title="Retirer l'association">
+                    <X size={13} />
+                  </button>
+                </div>
+              ))}
+            </AssociationGroup>
+            <AssociationGroup title="Items disponibles" count={availableProducts.length}>
+              {availableProducts.map((product) => {
+                const existingLink = linkByProductId.get(product.product_id);
+                const linkedElsewhere = existingLink
+                  ? ingredientById.get(existingLink.canonical_ingredient_id)?.name
+                  : "";
+                return (
+                  <div key={product.product_id} className="association-row">
+                    <span className="status-dot pending" />
+                    <div className="association-row-main">
+                      <span className="association-row-title">{product.name}</span>
+                      <span className="association-row-subtitle">
+                        {product.quantity} {product.unit || ""}{linkedElsewhere ? ` · lié à ${linkedElsewhere}` : ""}
+                      </span>
+                    </div>
+                    {selected && (
+                      <button className="btn btn-secondary btn-xs" type="button" onClick={() => addLink(selected.id, product)}>
+                        Associer
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </AssociationGroup>
+          </section>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AssociationGroup({ title, count, children }: { title: string; count: number; children: React.ReactNode }) {
+  return (
+    <div className="association-group">
+      <div className="association-group-title">
+        <span>{title}</span>
+        <span>{count}</span>
+      </div>
+      <div className="association-list">
+        {count > 0 ? children : <div className="association-empty">Rien ici</div>}
       </div>
     </div>
   );
