@@ -673,14 +673,22 @@ def _canonical_availability() -> dict[str, dict[str, float]]:
     """
     links = list_ingredient_inventory_links()
     products = {p["product_id"]: p for p in get_inventory_products()}
+    for product in list(products.values()):
+        for source_id in product.get("source_product_ids", []):
+            products.setdefault(source_id, product)
     availability: dict[str, dict[str, float]] = {}
+    counted: set[tuple[str, str]] = set()
     for link in links:
         product = products.get(link["inventory_product_id"])
         if not product:
             continue
+        cid = link["canonical_ingredient_id"]
+        logical_product_id = str(product.get("product_id") or link["inventory_product_id"])
+        if (cid, logical_product_id) in counted:
+            continue
+        counted.add((cid, logical_product_id))
         qty = float(product.get("available_quantity") or product.get("quantity") or 0)
         unit = str(product.get("available_unit") or product.get("unit") or "")
-        cid = link["canonical_ingredient_id"]
         availability.setdefault(cid, {})
         availability[cid][unit] = availability[cid].get(unit, 0.0) + qty
     return availability
@@ -1158,7 +1166,10 @@ def api_list_ingredient_inventory_links(
     actor: Actor = Depends(require_permission("menu.read")),
 ) -> list[dict]:
     links = list_ingredient_inventory_links(canonical_ingredient_id)
-    live_product_ids = {p["product_id"] for p in get_inventory_products()}
+    live_product_ids: set[str] = set()
+    for product in get_inventory_products():
+        live_product_ids.add(product["product_id"])
+        live_product_ids.update(product.get("source_product_ids", []))
     for link in links:
         link["is_live"] = link["inventory_product_id"] in live_product_ids
     return links

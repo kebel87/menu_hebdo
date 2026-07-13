@@ -211,6 +211,8 @@ interface InventoryProduct {
   available_unit?: string;
   consumption_mode?: string;
   package_content_unit?: string;
+  source_product_ids?: string[];
+  format_summary?: string;
 }
 
 interface NotificationConfig {
@@ -409,9 +411,10 @@ function formatNumber(value: number | undefined): string {
 function inventoryProductQuantityLabel(product: InventoryProduct): string {
   const usefulQty = product.available_quantity ?? product.quantity;
   const usefulUnit = product.available_unit || product.unit;
+  const useful = `${formatNumber(usefulQty)} ${usefulUnit}`.trim();
+  if (product.format_summary) return `${useful} - ${product.format_summary}`;
   const stockQty = product.stock_quantity;
   const stockUnit = product.stock_unit || product.unit;
-  const useful = `${formatNumber(usefulQty)} ${usefulUnit}`.trim();
   if (
     stockQty !== undefined &&
     stockUnit &&
@@ -3780,10 +3783,32 @@ function IngredientAssociationsSection() {
 
   const selected = ingredients.find((ingredient) => ingredient.id === selectedId) ?? null;
   const ingredientById = new Map(ingredients.map((ingredient) => [ingredient.id, ingredient]));
-  const linkByProductId = new Map(links.map((link) => [link.inventory_product_id, link]));
-  const productById = new Map(products.map((product) => [product.product_id, product]));
+  const linkByProductId = new Map<string, IngredientInventoryLink>();
+  for (const link of links) linkByProductId.set(link.inventory_product_id, link);
+  const productById = new Map<string, InventoryProduct>();
+  for (const product of products) {
+    productById.set(product.product_id, product);
+    for (const sourceId of product.source_product_ids ?? []) {
+      productById.set(sourceId, product);
+    }
+  }
+  function linkForProduct(product: InventoryProduct): IngredientInventoryLink | undefined {
+    return [product.product_id, ...(product.source_product_ids ?? [])]
+      .map((id) => linkByProductId.get(id))
+      .find(Boolean);
+  }
+  function logicalLinkId(link: IngredientInventoryLink): string {
+    return productById.get(link.inventory_product_id)?.product_id ?? link.inventory_product_id;
+  }
+  function logicalInventoryCount(canonicalIngredientId: string): number {
+    return new Set(
+      links
+        .filter((link) => link.canonical_ingredient_id === canonicalIngredientId)
+        .map(logicalLinkId)
+    ).size;
+  }
   const selectedMealieCount = mappings.filter((mapping) => mapping.canonical_ingredient_id === selectedId && mapping.status === "confirmed").length;
-  const selectedInventoryCount = links.filter((link) => link.canonical_ingredient_id === selectedId).length;
+  const selectedInventoryCount = selectedId ? logicalInventoryCount(selectedId) : 0;
   const filteredIngredients = ingredients.filter((ingredient) => searchKey(ingredient.name).includes(searchKey(centerQuery)));
   const selectedMappings = mappings
     .filter((mapping) => mapping.status === "confirmed" && mapping.canonical_ingredient_id === selectedId)
@@ -3797,10 +3822,16 @@ function IngredientAssociationsSection() {
   const ignoredMappings = mappings
     .filter((mapping) => mapping.status === "ignored")
     .filter((mapping) => searchKey(mapping.mealie_ingredient_text).includes(searchKey(mealieQuery)));
-  const selectedLinks = links.filter((link) => link.canonical_ingredient_id === selectedId);
+  const selectedLinks = [
+    ...new Map(
+      links
+        .filter((link) => link.canonical_ingredient_id === selectedId)
+        .map((link) => [logicalLinkId(link), link])
+    ).values(),
+  ];
   const filteredProducts = products.filter((product) => searchKey(product.name).includes(searchKey(inventoryQuery)));
   const availableProducts = filteredProducts.filter((product) => (
-    linkByProductId.get(product.product_id)?.canonical_ingredient_id !== selectedId
+    linkForProduct(product)?.canonical_ingredient_id !== selectedId
   ));
 
   function renderMappingRow(mapping: IngredientMapping, mode: "selected" | "pending" | "other" | "ignored") {
@@ -3914,7 +3945,7 @@ function IngredientAssociationsSection() {
             <div className="association-list association-list-center">
               {filteredIngredients.map((ingredient) => {
                 const mealieCount = mappings.filter((mapping) => mapping.status === "confirmed" && mapping.canonical_ingredient_id === ingredient.id).length;
-                const inventoryCount = links.filter((link) => link.canonical_ingredient_id === ingredient.id).length;
+                const inventoryCount = logicalInventoryCount(ingredient.id);
                 return (
                   <button
                     key={ingredient.id}
@@ -3997,7 +4028,7 @@ function IngredientAssociationsSection() {
             </AssociationGroup>
             <AssociationGroup title="Items disponibles" count={availableProducts.length}>
               {availableProducts.map((product) => {
-                const existingLink = linkByProductId.get(product.product_id);
+                const existingLink = linkForProduct(product);
                 const linkedElsewhere = existingLink
                   ? ingredientById.get(existingLink.canonical_ingredient_id)?.name
                   : "";

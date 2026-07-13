@@ -54,6 +54,39 @@ def inventory_available_quantity(item: dict[str, Any]) -> tuple[float, str]:
     return quantity, normalize_unit(item.get("unit"))
 
 
+def _logical_product_id(item: dict[str, Any]) -> str:
+    """Identifiant logique aligné sur les cartes d'inventaire_familial.
+
+    Un même produit en paquets peut avoir plusieurs lots/formats physiques
+    (ex. sacs de 1 lb et de 2 lb), mais Menu Hebdo doit l'associer une seule
+    fois à un ingrédient pivot.
+    """
+    if item.get("consumption_mode") == "package":
+        parts = [
+            "package",
+            item.get("domain", ""),
+            item.get("category", ""),
+            item.get("name", ""),
+            item.get("unit", ""),
+            normalize_unit(item.get("package_content_unit")),
+        ]
+    else:
+        parts = [
+            "item",
+            item.get("domain", ""),
+            item.get("category", ""),
+            item.get("name", ""),
+            item.get("unit", ""),
+            item.get("consumption_mode", ""),
+            str(item.get("consumption_step", "")),
+        ]
+    return "logical:" + "|".join(str(part).strip().lower() for part in parts)
+
+
+def _format_number(value: float) -> str:
+    return f"{value:g}"
+
+
 def _headers() -> dict[str, str]:
     h: dict[str, str] = {}
     if _SERVICE_KEY:
@@ -86,11 +119,15 @@ def get_inventory(force: bool = False) -> list[dict[str, Any]]:
 
 
 def get_inventory_products(force: bool = False) -> list[dict[str, Any]]:
-    """Produits distincts (dédupliqués par product_id, quantités sommées à travers
-    les lots) — utilisé pour la recherche d'items lors du lien ingrédient/inventaire."""
+    """Produits logiques (alignés avec les cartes d'inventaire_familial).
+
+    Les lots/formats d'un produit en paquets sont regroupés en une seule entrée
+    pour l'association Menu Hebdo, avec un résumé des formats physiques.
+    """
     by_product: dict[str, dict[str, Any]] = {}
     for item in get_inventory(force=force):
-        product_id = item.get("product_id")
+        source_product_id = item.get("product_id")
+        product_id = _logical_product_id(item)
         if not product_id:
             continue
         entry = by_product.setdefault(product_id, {
@@ -105,7 +142,11 @@ def get_inventory_products(force: bool = False) -> list[dict[str, Any]]:
             "available_unit": "",
             "consumption_mode": item.get("consumption_mode", ""),
             "package_content_unit": item.get("package_content_unit", ""),
+            "source_product_ids": [],
+            "format_breakdown": {},
         })
+        if source_product_id and source_product_id not in entry["source_product_ids"]:
+            entry["source_product_ids"].append(source_product_id)
         stock_qty = _as_float(item.get("quantity"))
         available_qty, available_unit = inventory_available_quantity(item)
         entry["quantity"] += available_qty
@@ -113,6 +154,25 @@ def get_inventory_products(force: bool = False) -> list[dict[str, Any]]:
         entry["available_quantity"] += available_qty
         if not entry["available_unit"] and available_unit:
             entry["available_unit"] = available_unit
+        if item.get("consumption_mode") == "package":
+            format_qty = _as_float(item.get("package_content_quantity"), 1.0)
+            key = _format_number(format_qty)
+            entry["format_breakdown"][key] = entry["format_breakdown"].get(key, 0.0) + stock_qty
+    for entry in by_product.values():
+        breakdown = [
+            {
+                "package_count": count,
+                "content_quantity": float(content_qty),
+                "content_unit": entry.get("available_unit") or normalize_unit(entry.get("package_content_unit")),
+            }
+            for content_qty, count in entry.pop("format_breakdown", {}).items()
+        ]
+        breakdown.sort(key=lambda row: row["content_quantity"])
+        entry["format_breakdown"] = breakdown
+        entry["format_summary"] = " · ".join(
+            f"{_format_number(row['package_count'])} x {_format_number(row['content_quantity'])} {row['content_unit']}"
+            for row in breakdown
+        )
     return sorted(by_product.values(), key=lambda p: str(p["name"]).lower())
 
 
