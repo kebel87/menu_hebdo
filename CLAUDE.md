@@ -23,11 +23,10 @@ L'app est utilisée sur iPhone (PWA installée). Toute UI se valide sur viewport
 - Frontend : `cd frontend && npm run dev` (build : `npm run build`)
 - Alternative sans venv : tester dans le conteneur prod via `docker exec` (code copié dans `/tmp` du conteneur)
 
-## Déploiement
-1. Commit + push sur `main` → GitHub Actions (`publish-ghcr.yml`) publie `ghcr.io/kebel87/menu_hebdo:latest`
-2. Attendre la fin du build GH Actions avant de redéployer
-3. Redéployer : `~/.claude/tools/komodo.sh deploy menu_hebdo` (stack sur **docker2** — 10.87.0.164)
-4. Vérifier : `curl -sk -o /dev/null -w "%{http_code}" https://menu.kb87.net` (302 vers auth = OK)
+## Déploiement — automatique
+Commit + push sur `main` suffit : GH Actions build l'image ghcr puis déclenche la Procedure Komodo « Redeploy menu_hebdo on push » (webhook signé) qui pull + redeploy sur **docker2** (10.87.0.164). Détails : mémoire `shared/reference_deploy_webhooks.md`.
+- Vérifier : `curl -sk -o /dev/null -w "%{http_code}" https://menu.kb87.net` (302 vers auth = OK)
+- Redeploy manuel au besoin : `~/.claude/tools/komodo.sh deploy menu_hebdo`
 
 ## Gotchas connus (déjà vécus)
 - oauth2-proxy : garder `OAUTH2_PROXY_HTTP_ADDRESS: "0.0.0.0:4180"` (sinon Bad Gateway silencieux)
