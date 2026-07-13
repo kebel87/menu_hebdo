@@ -709,6 +709,58 @@ function searchKey(value: string): string {
   return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 }
 
+function productMatchesLink(product: InventoryProduct, inventoryProductId: string): boolean {
+  return product.product_id === inventoryProductId || (product.source_product_ids ?? []).includes(inventoryProductId);
+}
+
+function unitForCanonicalIngredient(
+  canonicalIngredientId: string | null | undefined,
+  links: IngredientInventoryLink[],
+  products: InventoryProduct[],
+): string {
+  if (!canonicalIngredientId) return "";
+  const linkedProductIds = links
+    .filter((link) => link.canonical_ingredient_id === canonicalIngredientId)
+    .map((link) => link.inventory_product_id);
+  for (const linkedProductId of linkedProductIds) {
+    const product = products.find((candidate) => productMatchesLink(candidate, linkedProductId));
+    const unit = product?.available_unit || product?.unit || product?.stock_unit || "";
+    if (unit.trim()) return unit.trim();
+  }
+  return "";
+}
+
+function resolveCanonicalIngredient(ingredient: Ingredient, allIngredients: CanonicalIngredient[]): CanonicalIngredient | undefined {
+  if (ingredient.canonical_ingredient_id) {
+    return allIngredients.find((candidate) => candidate.id === ingredient.canonical_ingredient_id) ?? (
+      ingredient.name.trim()
+        ? { id: ingredient.canonical_ingredient_id, name: ingredient.name.trim(), created_at: "" }
+        : undefined
+    );
+  }
+  const ingredientKey = searchKey(ingredient.name.trim());
+  if (!ingredientKey) return undefined;
+  return allIngredients.find((candidate) => searchKey(candidate.name) === ingredientKey);
+}
+
+function normalizeLocalRecipeIngredients(
+  ingredients: Ingredient[],
+  allIngredients: CanonicalIngredient[],
+  links: IngredientInventoryLink[],
+  products: InventoryProduct[],
+): Ingredient[] {
+  return ingredients.flatMap((ingredient) => {
+    const canonicalIngredient = resolveCanonicalIngredient(ingredient, allIngredients);
+    if (!canonicalIngredient) return [];
+    return [{
+      name: canonicalIngredient.name,
+      quantity: ingredient.quantity ?? null,
+      unit: unitForCanonicalIngredient(canonicalIngredient.id, links, products) || ingredient.unit || "",
+      canonical_ingredient_id: canonicalIngredient.id,
+    }];
+  });
+}
+
 function weeksAgo(iso: string): string {
   const d = new Date(iso + "T00:00:00");
   const now = new Date();
@@ -2423,6 +2475,96 @@ function SideEditorModal({
 
 // ─── RecipeDetailModal ────────────────────────────────────────────────────────
 
+function CanonicalIngredientPicker({
+  value,
+  ingredients,
+  fallbackLabel = "",
+  placeholder = "Ingrédient Menu Hebdo",
+  onSelect,
+}: {
+  value?: string | null;
+  ingredients: CanonicalIngredient[];
+  fallbackLabel?: string;
+  placeholder?: string;
+  onSelect: (ingredient: CanonicalIngredient) => void;
+}) {
+  const selected = ingredients.find((ingredient) => ingredient.id === value);
+  const selectedLabel = selected?.name ?? fallbackLabel;
+  const [query, setQuery] = useState(selectedLabel);
+  const [open, setOpen] = useState(false);
+  const normalizedQuery = searchKey(query.trim());
+  const filtered = normalizedQuery
+    ? ingredients.filter((ingredient) => searchKey(ingredient.name).includes(normalizedQuery)).slice(0, 8)
+    : ingredients.slice(0, 8);
+
+  useEffect(() => {
+    setQuery(selectedLabel);
+  }, [selected?.id, selectedLabel]);
+
+  function selectIngredient(ingredient: CanonicalIngredient) {
+    onSelect(ingredient);
+    setQuery(ingredient.name);
+    setOpen(false);
+  }
+
+  function commitExactMatch() {
+    const exact = ingredients.find((ingredient) => searchKey(ingredient.name) === normalizedQuery);
+    if (exact) {
+      selectIngredient(exact);
+      return;
+    }
+    setQuery(selectedLabel);
+    setOpen(false);
+  }
+
+  return (
+    <div className="ingredient-picker">
+      <input
+        value={query}
+        onChange={(event) => {
+          setQuery(event.target.value);
+          setOpen(true);
+        }}
+        onFocus={() => setOpen(true)}
+        onBlur={commitExactMatch}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            if (filtered[0]) selectIngredient(filtered[0]);
+          }
+          if (event.key === "Escape") {
+            setQuery(selectedLabel);
+            setOpen(false);
+          }
+        }}
+        placeholder={placeholder}
+        autoComplete="off"
+      />
+      {open && (
+        <div className="ingredient-picker-menu">
+          {filtered.length > 0 ? (
+            filtered.map((ingredient) => (
+              <button
+                key={ingredient.id}
+                type="button"
+                className={`ingredient-picker-option${ingredient.id === value ? " selected" : ""}`}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  selectIngredient(ingredient);
+                }}
+              >
+                {ingredient.name}
+              </button>
+            ))
+          ) : (
+            <div className="ingredient-picker-empty">Aucun ingrédient existant</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RecipeDetailModal({
   recipe,
   canEdit,
@@ -2447,6 +2589,8 @@ function RecipeDetailModal({
   const [likedBy, setLikedBy] = useState<string[]>(recipe.liked_by ?? []);
   const [ingredients, setIngredients] = useState<Ingredient[]>(recipe.ingredients ?? []);
   const [allIngredients, setAllIngredients] = useState<CanonicalIngredient[]>([]);
+  const [ingredientLinks, setIngredientLinks] = useState<IngredientInventoryLink[]>([]);
+  const [inventoryProducts, setInventoryProducts] = useState<InventoryProduct[]>([]);
   const allChildren = usePeople();
   const [saving, setSaving] = useState(false);
 
@@ -2455,9 +2599,15 @@ function RecipeDetailModal({
     api<CanonicalTag[]>("/api/tags")
       .then((t) => setAllTags([...t].filter((tag) => !tag.is_filter).sort((a, b) => a.name.localeCompare(b.name))))
       .catch(() => notify("Impossible de charger les tags."));
-    api<CanonicalIngredient[]>("/api/canonical-ingredients")
+    loadCanonicalIngredients()
       .then((t) => setAllIngredients([...t].sort((a, b) => a.name.localeCompare(b.name))))
       .catch(() => notify("Impossible de charger les ingrédients canoniques."));
+    loadIngredientLinks()
+      .then(setIngredientLinks)
+      .catch(() => undefined);
+    loadInventoryProducts()
+      .then(setInventoryProducts)
+      .catch(() => undefined);
   }, [recipe.source]);
 
   function toggleLikedBy(childId: string) {
@@ -2478,6 +2628,14 @@ function RecipeDetailModal({
 
   function removeIngredientRow(index: number) {
     setIngredients((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function selectIngredientRow(index: number, canonicalIngredient: CanonicalIngredient) {
+    updateIngredient(index, {
+      name: canonicalIngredient.name,
+      unit: unitForCanonicalIngredient(canonicalIngredient.id, ingredientLinks, inventoryProducts),
+      canonical_ingredient_id: canonicalIngredient.id,
+    });
   }
 
   async function save() {
@@ -2502,7 +2660,7 @@ function RecipeDetailModal({
             tag_ids: tagIds,
             notes,
             liked_by: likedBy,
-            ingredients: ingredients.filter((i) => i.name.trim()),
+            ingredients: normalizeLocalRecipeIngredients(ingredients, allIngredients, ingredientLinks, inventoryProducts),
           }),
         });
         onUpdated({ ...recipe, ...updated, source: "local" });
@@ -2582,37 +2740,21 @@ function RecipeDetailModal({
           <section className="recipe-detail-section">
             <div className="section-label">Ingrédients</div>
             {ingredients.map((ing, i) => (
-              <div key={i} className="ingredient-row">
-                <input
-                  value={ing.name}
-                  onChange={(e) => updateIngredient(i, { name: e.target.value })}
-                  placeholder="Nom de l'ingrédient"
-                  className="ingredient-name"
-                />
+              <div key={i} className="ingredient-row ingredient-row-picker">
                 <input
                   type="number"
                   value={ing.quantity ?? ""}
                   onChange={(e) => updateIngredient(i, { quantity: e.target.value ? parseFloat(e.target.value) : null })}
                   placeholder="Qté"
                   min="0"
-                  style={{ width: 60 }}
+                  className="ingredient-quantity"
                 />
-                <input
-                  value={ing.unit ?? ""}
-                  onChange={(e) => updateIngredient(i, { unit: e.target.value })}
-                  placeholder="Unité"
-                  style={{ width: 70 }}
+                <CanonicalIngredientPicker
+                  value={resolveCanonicalIngredient(ing, allIngredients)?.id ?? null}
+                  ingredients={allIngredients}
+                  fallbackLabel={ing.name}
+                  onSelect={(canonicalIngredient) => selectIngredientRow(i, canonicalIngredient)}
                 />
-                <select
-                  value={ing.canonical_ingredient_id ?? ""}
-                  onChange={(e) => updateIngredient(i, { canonical_ingredient_id: e.target.value || null })}
-                  className="ingredient-link"
-                >
-                  <option value="">— Ingrédient Menu Hebdo —</option>
-                  {allIngredients.map((ci) => (
-                    <option key={ci.id} value={ci.id}>{ci.name}</option>
-                  ))}
-                </select>
                 <button className="btn-icon" onClick={() => removeIngredientRow(i)} title="Retirer">
                   <X size={13} />
                 </button>
@@ -2774,6 +2916,8 @@ function LocalRecipeModal({
   const [likedBy, setLikedBy] = useState<string[]>(recipe?.liked_by ?? []);
   const [ingredients, setIngredients] = useState<Ingredient[]>(recipe?.ingredients ?? []);
   const [allIngredients, setAllIngredients] = useState<CanonicalIngredient[]>([]);
+  const [ingredientLinks, setIngredientLinks] = useState<IngredientInventoryLink[]>([]);
+  const [inventoryProducts, setInventoryProducts] = useState<InventoryProduct[]>([]);
   const allChildren = usePeople();
   const [saving, setSaving] = useState(false);
 
@@ -2781,9 +2925,15 @@ function LocalRecipeModal({
     api<CanonicalTag[]>("/api/tags")
       .then((t) => setAllTags([...t].sort((a, b) => a.name.localeCompare(b.name))))
       .catch(() => notify("Impossible de charger les tags."));
-    api<CanonicalIngredient[]>("/api/canonical-ingredients")
+    loadCanonicalIngredients()
       .then((t) => setAllIngredients([...t].sort((a, b) => a.name.localeCompare(b.name))))
       .catch(() => notify("Impossible de charger les ingrédients canoniques."));
+    loadIngredientLinks()
+      .then(setIngredientLinks)
+      .catch(() => undefined);
+    loadInventoryProducts()
+      .then(setInventoryProducts)
+      .catch(() => undefined);
   }, []);
 
   function toggleLikedBy(childId: string) {
@@ -2802,6 +2952,14 @@ function LocalRecipeModal({
     setIngredients((prev) => prev.filter((_, i) => i !== index));
   }
 
+  function selectIngredientRow(index: number, canonicalIngredient: CanonicalIngredient) {
+    updateIngredient(index, {
+      name: canonicalIngredient.name,
+      unit: unitForCanonicalIngredient(canonicalIngredient.id, ingredientLinks, inventoryProducts),
+      canonical_ingredient_id: canonicalIngredient.id,
+    });
+  }
+
   async function save() {
     if (!name.trim()) return;
     setSaving(true);
@@ -2814,7 +2972,7 @@ function LocalRecipeModal({
         notes,
         tag_ids: tagIds,
         liked_by: likedBy,
-        ingredients: ingredients.filter((i) => i.name.trim()),
+        ingredients: normalizeLocalRecipeIngredients(ingredients, allIngredients, ingredientLinks, inventoryProducts),
       };
       let r: Recipe;
       if (recipe?.id) {
@@ -2896,37 +3054,21 @@ function LocalRecipeModal({
         <div className="form-row">
           <label>Ingrédients</label>
           {ingredients.map((ing, i) => (
-            <div key={i} className="ingredient-row">
-              <input
-                value={ing.name}
-                onChange={(e) => updateIngredient(i, { name: e.target.value })}
-                placeholder="Nom de l'ingrédient"
-                style={{ flex: 2 }}
-              />
+            <div key={i} className="ingredient-row ingredient-row-picker">
               <input
                 type="number"
                 value={ing.quantity ?? ""}
                 onChange={(e) => updateIngredient(i, { quantity: e.target.value ? parseFloat(e.target.value) : null })}
                 placeholder="Qté"
                 min="0"
-                style={{ width: 60 }}
+                className="ingredient-quantity"
               />
-              <input
-                value={ing.unit ?? ""}
-                onChange={(e) => updateIngredient(i, { unit: e.target.value })}
-                placeholder="Unité"
-                style={{ width: 70 }}
+              <CanonicalIngredientPicker
+                value={resolveCanonicalIngredient(ing, allIngredients)?.id ?? null}
+                ingredients={allIngredients}
+                fallbackLabel={ing.name}
+                onSelect={(canonicalIngredient) => selectIngredientRow(i, canonicalIngredient)}
               />
-              <select
-                value={ing.canonical_ingredient_id ?? ""}
-                onChange={(e) => updateIngredient(i, { canonical_ingredient_id: e.target.value || null })}
-                style={{ flex: 2, fontSize: 12 }}
-              >
-                <option value="">— Ingrédient Menu Hebdo —</option>
-                {allIngredients.map((ci) => (
-                  <option key={ci.id} value={ci.id}>{ci.name}</option>
-                ))}
-              </select>
               <button className="btn-icon" onClick={() => removeIngredientRow(i)} title="Retirer">
                 <X size={13} />
               </button>
@@ -3644,7 +3786,7 @@ function IngredientAssociationsSection() {
   const [inventoryQuery, setInventoryQuery] = useState("");
   const [editingIngredientId, setEditingIngredientId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
-  const [showIgnoredMealie, setShowIgnoredMealie] = useState(false);
+  const [ignoredMealieOpen, setIgnoredMealieOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [syncingMealie, setSyncingMealie] = useState(false);
   const [syncingInventory, setSyncingInventory] = useState(false);
@@ -3943,16 +4085,6 @@ function IngredientAssociationsSection() {
               <Search size={14} />
               <input value={mealieQuery} onChange={(e) => setMealieQuery(e.target.value)} placeholder="Rechercher Mealie…" />
             </div>
-            <label className="association-toggle-row">
-              <input
-                type="checkbox"
-                checked={showIgnoredMealie}
-                onChange={(e) => setShowIgnoredMealie(e.target.checked)}
-              />
-              <span>Afficher les ignorés</span>
-              <em>{ignoredMappings.length}</em>
-            </label>
-
             <AssociationGroup title={selected ? `Associés à ${selectedIngredientName()}` : "Associés"} count={selectedMappings.length}>
               {selectedMappings.map((mapping) => renderMappingRow(mapping, "selected"))}
             </AssociationGroup>
@@ -3964,11 +4096,14 @@ function IngredientAssociationsSection() {
                 {otherMappings.map((mapping) => renderMappingRow(mapping, "other"))}
               </AssociationGroup>
             )}
-            {showIgnoredMealie && (
-              <AssociationGroup title="Ignorés" count={ignoredMappings.length}>
-                {ignoredMappings.map((mapping) => renderMappingRow(mapping, "ignored"))}
-              </AssociationGroup>
-            )}
+            <AssociationGroup
+              title="Ignorés"
+              count={ignoredMappings.length}
+              collapsed={!ignoredMealieOpen}
+              onToggle={() => setIgnoredMealieOpen((open) => !open)}
+            >
+              {ignoredMappings.map((mapping) => renderMappingRow(mapping, "ignored"))}
+            </AssociationGroup>
           </section>
 
           <section className="association-column association-column-center">
@@ -4141,16 +4276,42 @@ function IngredientAssociationsSection() {
   );
 }
 
-function AssociationGroup({ title, count, children }: { title: string; count: number; children: React.ReactNode }) {
+function AssociationGroup({
+  title,
+  count,
+  children,
+  collapsed = false,
+  onToggle,
+}: {
+  title: string;
+  count: number;
+  children: React.ReactNode;
+  collapsed?: boolean;
+  onToggle?: () => void;
+}) {
   return (
     <div className="association-group">
-      <div className="association-group-title">
+      <div
+        className={`association-group-title${onToggle ? " association-group-title-toggle" : ""}`}
+        onClick={onToggle}
+        role={onToggle ? "button" : undefined}
+        tabIndex={onToggle ? 0 : undefined}
+        onKeyDown={(e) => {
+          if (!onToggle) return;
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onToggle();
+          }
+        }}
+      >
         <span>{title}</span>
-        <span>{count}</span>
+        <span>{onToggle ? `${collapsed ? "Afficher" : "Masquer"} · ${count}` : count}</span>
       </div>
-      <div className="association-list">
-        {count > 0 ? children : <div className="association-empty">Rien ici</div>}
-      </div>
+      {!collapsed && (
+        <div className="association-list">
+          {count > 0 ? children : <div className="association-empty">Rien ici</div>}
+        </div>
+      )}
     </div>
   );
 }

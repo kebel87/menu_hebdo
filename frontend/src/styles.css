@@ -1106,6 +1106,57 @@ button.tag-choice {
 .ingredient-row input, .ingredient-row select { padding: 6px 8px; font-size: 14px; }
 .ingredient-row .ingredient-name { flex: 1 1 100%; }
 .ingredient-row .ingredient-link { flex: 1 1 140px; }
+.ingredient-row-picker {
+  flex-wrap: nowrap;
+  align-items: flex-start;
+}
+.ingredient-row .ingredient-quantity {
+  flex: 0 0 72px;
+  width: 72px;
+}
+.ingredient-picker {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.ingredient-picker input {
+  width: 100%;
+}
+.ingredient-picker-menu {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 190px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  box-shadow: 0 12px 28px rgba(28, 33, 30, 0.16);
+}
+.ingredient-picker-option {
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  padding: 9px 10px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font-size: 14px;
+}
+.ingredient-picker-option:last-child {
+  border-bottom: 0;
+}
+.ingredient-picker-option:hover,
+.ingredient-picker-option.selected {
+  background: var(--green-soft);
+}
+.ingredient-picker-empty {
+  padding: 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
 
 /* ── Associations ingrédients ── */
 .settings-section-header {
@@ -1179,32 +1230,6 @@ button.tag-choice {
   background: transparent;
 }
 .association-search input:focus { outline: none; }
-.association-toggle-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0 10px 10px;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 600;
-}
-.association-toggle-row input {
-  width: 16px;
-  height: 16px;
-  accent-color: var(--green);
-}
-.association-toggle-row span {
-  flex: 1;
-}
-.association-toggle-row em {
-  font-style: normal;
-  font-size: 11px;
-  color: var(--muted);
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  padding: 2px 6px;
-}
 .association-group {
   border-top: 1px solid var(--line);
 }
@@ -1217,6 +1242,13 @@ button.tag-choice {
   font-size: 11px;
   font-weight: 800;
   text-transform: uppercase;
+}
+.association-group-title-toggle {
+  cursor: pointer;
+  background: var(--bg);
+}
+.association-group-title-toggle:hover {
+  color: var(--ink);
 }
 .association-list {
   display: flex;
