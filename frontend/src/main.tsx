@@ -205,6 +205,12 @@ interface InventoryProduct {
   domain: string;
   unit: string;
   quantity: number;
+  stock_quantity?: number;
+  stock_unit?: string;
+  available_quantity?: number;
+  available_unit?: string;
+  consumption_mode?: string;
+  package_content_unit?: string;
 }
 
 interface NotificationConfig {
@@ -393,6 +399,27 @@ function prefetchStats() {
 
 function byName<T extends { name: string }>(items: T[]): T[] {
   return [...items].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function formatNumber(value: number | undefined): string {
+  if (value === undefined || Number.isNaN(value)) return "0";
+  return Number.isInteger(value) ? String(value) : value.toLocaleString("fr-CA", { maximumFractionDigits: 2 });
+}
+
+function inventoryProductQuantityLabel(product: InventoryProduct): string {
+  const usefulQty = product.available_quantity ?? product.quantity;
+  const usefulUnit = product.available_unit || product.unit;
+  const stockQty = product.stock_quantity;
+  const stockUnit = product.stock_unit || product.unit;
+  const useful = `${formatNumber(usefulQty)} ${usefulUnit}`.trim();
+  if (
+    stockQty !== undefined &&
+    stockUnit &&
+    (stockUnit !== usefulUnit || Math.abs(stockQty - usefulQty) > 0.001)
+  ) {
+    return `${useful} · ${formatNumber(stockQty)} ${stockUnit}`;
+  }
+  return useful;
 }
 
 function loadTagMappings(): Promise<TagMapping[]> {
@@ -3754,6 +3781,7 @@ function IngredientAssociationsSection() {
   const selected = ingredients.find((ingredient) => ingredient.id === selectedId) ?? null;
   const ingredientById = new Map(ingredients.map((ingredient) => [ingredient.id, ingredient]));
   const linkByProductId = new Map(links.map((link) => [link.inventory_product_id, link]));
+  const productById = new Map(products.map((product) => [product.product_id, product]));
   const selectedMealieCount = mappings.filter((mapping) => mapping.canonical_ingredient_id === selectedId && mapping.status === "confirmed").length;
   const selectedInventoryCount = links.filter((link) => link.canonical_ingredient_id === selectedId).length;
   const filteredIngredients = ingredients.filter((ingredient) => searchKey(ingredient.name).includes(searchKey(centerQuery)));
@@ -3948,16 +3976,23 @@ function IngredientAssociationsSection() {
             </div>
             <AssociationGroup title={`Associés à ${selectedIngredientName()}`} count={selectedLinks.length}>
               {selectedLinks.map((link) => (
-                <div key={link.id} className={`association-row${link.is_live ? "" : " association-row-missing"}`}>
-                  <span className={`status-dot ${link.is_live ? "confirmed" : "ignored"}`} />
-                  <div className="association-row-main">
-                    <span className="association-row-title">{link.inventory_product_name}</span>
-                    <span className="association-row-subtitle">{link.is_live ? link.domain : "introuvable dans l'inventaire actuel"}</span>
-                  </div>
-                  <button className="btn-icon" type="button" onClick={() => removeLink(link.id)} title="Retirer l'association">
-                    <X size={13} />
-                  </button>
-                </div>
+                (() => {
+                  const product = productById.get(link.inventory_product_id);
+                  return (
+                    <div key={link.id} className={`association-row${link.is_live ? "" : " association-row-missing"}`}>
+                      <span className={`status-dot ${link.is_live ? "confirmed" : "ignored"}`} />
+                      <div className="association-row-main">
+                        <span className="association-row-title">{link.inventory_product_name}</span>
+                        <span className="association-row-subtitle">
+                          {product ? inventoryProductQuantityLabel(product) : "introuvable dans l'inventaire actuel"}
+                        </span>
+                      </div>
+                      <button className="btn-icon" type="button" onClick={() => removeLink(link.id)} title="Retirer l'association">
+                        <X size={13} />
+                      </button>
+                    </div>
+                  );
+                })()
               ))}
             </AssociationGroup>
             <AssociationGroup title="Items disponibles" count={availableProducts.length}>
@@ -3972,7 +4007,7 @@ function IngredientAssociationsSection() {
                     <div className="association-row-main">
                       <span className="association-row-title">{product.name}</span>
                       <span className="association-row-subtitle">
-                        {product.quantity} {product.unit || ""}{linkedElsewhere ? ` · lié à ${linkedElsewhere}` : ""}
+                        {inventoryProductQuantityLabel(product)}{linkedElsewhere ? ` · lié à ${linkedElsewhere}` : ""}
                       </span>
                     </div>
                     {selected && (

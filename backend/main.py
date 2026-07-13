@@ -665,16 +665,24 @@ def api_delete_local_recipe(
 # Mealie proxy + recettes unifiées
 # ---------------------------------------------------------------------------
 
-def _canonical_availability() -> dict[str, float]:
-    """Quantité disponible par ingrédient canonique, agrégée à travers tous les
-    produits d'inventaire liés (résolution par product_id, pas par nom)."""
+def _canonical_availability() -> dict[str, dict[str, float]]:
+    """Quantité disponible par ingrédient canonique et par unité utile.
+
+    Pour les produits en paquets, inventory_client expose déjà la quantité en
+    contenu total (ex. lb) plutôt qu'en nombre de sacs.
+    """
     links = list_ingredient_inventory_links()
-    quantities = {p["product_id"]: p["quantity"] for p in get_inventory_products()}
-    availability: dict[str, float] = {}
+    products = {p["product_id"]: p for p in get_inventory_products()}
+    availability: dict[str, dict[str, float]] = {}
     for link in links:
-        qty = quantities.get(link["inventory_product_id"], 0.0)
+        product = products.get(link["inventory_product_id"])
+        if not product:
+            continue
+        qty = float(product.get("available_quantity") or product.get("quantity") or 0)
+        unit = str(product.get("available_unit") or product.get("unit") or "")
         cid = link["canonical_ingredient_id"]
-        availability[cid] = availability.get(cid, 0.0) + qty
+        availability.setdefault(cid, {})
+        availability[cid][unit] = availability[cid].get(unit, 0.0) + qty
     return availability
 
 

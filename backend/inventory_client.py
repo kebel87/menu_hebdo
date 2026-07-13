@@ -17,6 +17,43 @@ _cache: list[dict[str, Any]] = []
 _cache_at: float = 0.0
 
 
+def _as_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def normalize_unit(unit: Any) -> str:
+    raw = str(unit or "").strip().lower()
+    aliases = {
+        "lbs": "lb",
+        "livre": "lb",
+        "livres": "lb",
+        "pounds": "lb",
+        "pound": "lb",
+        "kilogramme": "kg",
+        "kilogrammes": "kg",
+        "gramme": "g",
+        "grammes": "g",
+    }
+    return aliases.get(raw, raw)
+
+
+def inventory_available_quantity(item: dict[str, Any]) -> tuple[float, str]:
+    """Quantité utile côté menu.
+
+    Pour un item d'inventaire en paquets, `quantity` représente le nombre de
+    sacs/boîtes/etc. ; Menu Hebdo doit plutôt raisonner sur le contenu total
+    (ex. 2 sacs x 2 lb = 4 lb).
+    """
+    quantity = _as_float(item.get("quantity"))
+    content_unit = normalize_unit(item.get("package_content_unit"))
+    if item.get("consumption_mode") == "package" and content_unit:
+        return quantity * _as_float(item.get("package_content_quantity"), 1.0), content_unit
+    return quantity, normalize_unit(item.get("unit"))
+
+
 def _headers() -> dict[str, str]:
     h: dict[str, str] = {}
     if _SERVICE_KEY:
@@ -61,14 +98,26 @@ def get_inventory_products(force: bool = False) -> list[dict[str, Any]]:
             "name": item.get("name", ""),
             "domain": item.get("domain", ""),
             "unit": item.get("unit", ""),
+            "stock_unit": item.get("unit", ""),
             "quantity": 0.0,
+            "stock_quantity": 0.0,
+            "available_quantity": 0.0,
+            "available_unit": "",
+            "consumption_mode": item.get("consumption_mode", ""),
+            "package_content_unit": item.get("package_content_unit", ""),
         })
-        entry["quantity"] += float(item.get("quantity") or 0)
+        stock_qty = _as_float(item.get("quantity"))
+        available_qty, available_unit = inventory_available_quantity(item)
+        entry["quantity"] += available_qty
+        entry["stock_quantity"] += stock_qty
+        entry["available_quantity"] += available_qty
+        if not entry["available_unit"] and available_unit:
+            entry["available_unit"] = available_unit
     return sorted(by_product.values(), key=lambda p: str(p["name"]).lower())
 
 
 def score_ingredients(
-    entries: list[dict[str, Any]], canonical_availability: dict[str, float]
+    entries: list[dict[str, Any]], canonical_availability: dict[str, dict[str, float]]
 ) -> dict[str, Any]:
     """Score de disponibilité basé sur les liens canoniques confirmés (pas de
     matching approximatif sur le nom). `entries` : [{"name": str,
@@ -80,8 +129,17 @@ def score_ingredients(
     missing: list[str] = []
     available: list[str] = []
     for e in linked:
-        qty = canonical_availability.get(e["canonical_ingredient_id"], 0.0)
-        (available if qty > 0 else missing).append(e.get("name", ""))
+        by_unit = canonical_availability.get(e["canonical_ingredient_id"], {})
+        required_qty = _as_float(e.get("quantity"), 0.0)
+        required_unit = normalize_unit(e.get("unit"))
+        name = e.get("name", "")
+        if required_qty > 0 and required_unit:
+            qty = by_unit.get(required_unit, 0.0)
+            label = f"{name} ({required_qty:g} {required_unit} requis, {qty:g} {required_unit} dispo)"
+            (available if qty >= required_qty else missing).append(label)
+        else:
+            qty = sum(by_unit.values())
+            (available if qty > 0 else missing).append(name)
     total = len(linked)
     return {
         "score": round(len(available) / total, 2) if total > 0 else None,
