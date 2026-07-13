@@ -1179,6 +1179,32 @@ button.tag-choice {
   background: transparent;
 }
 .association-search input:focus { outline: none; }
+.association-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 10px 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.association-toggle-row input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--green);
+}
+.association-toggle-row span {
+  flex: 1;
+}
+.association-toggle-row em {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+}
 .association-group {
   border-top: 1px solid var(--line);
 }
@@ -1228,6 +1254,13 @@ button.tag-choice {
 .association-row-subtitle {
   color: var(--muted);
   font-size: 11px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+.association-row-quantity {
+  color: var(--green);
+  font-size: 12px;
+  font-weight: 800;
   line-height: 1.25;
   overflow-wrap: anywhere;
 }

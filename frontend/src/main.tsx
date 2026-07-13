@@ -408,11 +408,16 @@ function formatNumber(value: number | undefined): string {
   return Number.isInteger(value) ? String(value) : value.toLocaleString("fr-CA", { maximumFractionDigits: 2 });
 }
 
-function inventoryProductQuantityLabel(product: InventoryProduct): string {
+function inventoryProductAvailableLabel(product: InventoryProduct): string {
   const usefulQty = product.available_quantity ?? product.quantity;
   const usefulUnit = product.available_unit || product.unit;
-  const useful = `${formatNumber(usefulQty)} ${usefulUnit}`.trim();
-  if (product.format_summary) return `${useful} - ${product.format_summary}`;
+  return `${formatNumber(usefulQty)} ${usefulUnit}`.trim();
+}
+
+function inventoryProductFormatLabel(product: InventoryProduct): string {
+  if (product.format_summary) return product.format_summary;
+  const usefulQty = product.available_quantity ?? product.quantity;
+  const usefulUnit = product.available_unit || product.unit;
   const stockQty = product.stock_quantity;
   const stockUnit = product.stock_unit || product.unit;
   if (
@@ -420,9 +425,9 @@ function inventoryProductQuantityLabel(product: InventoryProduct): string {
     stockUnit &&
     (stockUnit !== usefulUnit || Math.abs(stockQty - usefulQty) > 0.001)
   ) {
-    return `${useful} · ${formatNumber(stockQty)} ${stockUnit}`;
+    return `${formatNumber(stockQty)} ${stockUnit}`;
   }
-  return useful;
+  return "";
 }
 
 function loadTagMappings(): Promise<TagMapping[]> {
@@ -3639,6 +3644,7 @@ function IngredientAssociationsSection() {
   const [inventoryQuery, setInventoryQuery] = useState("");
   const [editingIngredientId, setEditingIngredientId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+  const [showIgnoredMealie, setShowIgnoredMealie] = useState(false);
   const [loading, setLoading] = useState(true);
   const [syncingMealie, setSyncingMealie] = useState(false);
   const [syncingInventory, setSyncingInventory] = useState(false);
@@ -3937,6 +3943,15 @@ function IngredientAssociationsSection() {
               <Search size={14} />
               <input value={mealieQuery} onChange={(e) => setMealieQuery(e.target.value)} placeholder="Rechercher Mealie…" />
             </div>
+            <label className="association-toggle-row">
+              <input
+                type="checkbox"
+                checked={showIgnoredMealie}
+                onChange={(e) => setShowIgnoredMealie(e.target.checked)}
+              />
+              <span>Afficher les ignorés</span>
+              <em>{ignoredMappings.length}</em>
+            </label>
 
             <AssociationGroup title={selected ? `Associés à ${selectedIngredientName()}` : "Associés"} count={selectedMappings.length}>
               {selectedMappings.map((mapping) => renderMappingRow(mapping, "selected"))}
@@ -3949,9 +3964,11 @@ function IngredientAssociationsSection() {
                 {otherMappings.map((mapping) => renderMappingRow(mapping, "other"))}
               </AssociationGroup>
             )}
-            <AssociationGroup title="Ignorés" count={ignoredMappings.length}>
-              {ignoredMappings.map((mapping) => renderMappingRow(mapping, "ignored"))}
-            </AssociationGroup>
+            {showIgnoredMealie && (
+              <AssociationGroup title="Ignorés" count={ignoredMappings.length}>
+                {ignoredMappings.map((mapping) => renderMappingRow(mapping, "ignored"))}
+              </AssociationGroup>
+            )}
           </section>
 
           <section className="association-column association-column-center">
@@ -4079,12 +4096,14 @@ function IngredientAssociationsSection() {
                   return (
                     <div key={link.id} className={`association-row${link.is_live ? "" : " association-row-missing"}`}>
                       <span className={`status-dot ${link.is_live ? "confirmed" : "ignored"}`} />
-                      <div className="association-row-main">
-                        <span className="association-row-title">{link.inventory_product_name}</span>
-                        <span className="association-row-subtitle">
-                          {product ? inventoryProductQuantityLabel(product) : "introuvable dans l'inventaire actuel"}
-                        </span>
-                      </div>
+	                      <div className="association-row-main">
+	                        <span className="association-row-title">{link.inventory_product_name}</span>
+	                        {product ? (
+	                          <InventoryQuantityLines product={product} />
+	                        ) : (
+	                          <span className="association-row-subtitle">introuvable dans l'inventaire actuel</span>
+	                        )}
+	                      </div>
                       <button className="btn-icon" type="button" onClick={() => removeLink(link.id)} title="Retirer l'association">
                         <X size={13} />
                       </button>
@@ -4102,12 +4121,10 @@ function IngredientAssociationsSection() {
                 return (
                   <div key={product.product_id} className="association-row">
                     <span className="status-dot pending" />
-                    <div className="association-row-main">
-                      <span className="association-row-title">{product.name}</span>
-                      <span className="association-row-subtitle">
-                        {inventoryProductQuantityLabel(product)}{linkedElsewhere ? ` · lié à ${linkedElsewhere}` : ""}
-                      </span>
-                    </div>
+	                    <div className="association-row-main">
+	                      <span className="association-row-title">{product.name}</span>
+	                      <InventoryQuantityLines product={product} linkedElsewhere={linkedElsewhere} />
+	                    </div>
                     {selected && (
                       <button className="btn btn-secondary btn-xs" type="button" onClick={() => addLink(selected.id, product)}>
                         Associer
@@ -4135,6 +4152,17 @@ function AssociationGroup({ title, count, children }: { title: string; count: nu
         {count > 0 ? children : <div className="association-empty">Rien ici</div>}
       </div>
     </div>
+  );
+}
+
+function InventoryQuantityLines({ product, linkedElsewhere }: { product: InventoryProduct; linkedElsewhere?: string }) {
+  const format = inventoryProductFormatLabel(product);
+  return (
+    <>
+      <span className="association-row-quantity">{inventoryProductAvailableLabel(product)} disponibles</span>
+      {format && <span className="association-row-subtitle">{format}</span>}
+      {linkedElsewhere && <span className="association-row-subtitle">lié à {linkedElsewhere}</span>}
+    </>
   );
 }
 
