@@ -3874,7 +3874,7 @@ function IngredientAssociationsSection() {
             Associer
           </button>
         )}
-        {selected && mode !== "ignored" && (
+        {mode !== "ignored" && (
           <button
             className="btn-icon"
             type="button"
@@ -3894,7 +3894,7 @@ function IngredientAssociationsSection() {
             <X size={13} />
           </button>
         )}
-        {selected && mode === "ignored" && (
+        {mode === "ignored" && (
           <button
             className="btn btn-secondary btn-xs"
             type="button"
