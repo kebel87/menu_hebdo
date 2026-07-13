@@ -3637,6 +3637,8 @@ function IngredientAssociationsSection() {
   const [centerQuery, setCenterQuery] = useState("");
   const [mealieQuery, setMealieQuery] = useState("");
   const [inventoryQuery, setInventoryQuery] = useState("");
+  const [editingIngredientId, setEditingIngredientId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
   const [loading, setLoading] = useState(true);
   const [syncingMealie, setSyncingMealie] = useState(false);
   const [syncingInventory, setSyncingInventory] = useState(false);
@@ -3658,7 +3660,6 @@ function IngredientAssociationsSection() {
       setMappings(loadedMappings.map((mapping) => enrichIngredientMapping(mapping, loadedIngredients)));
       setLinks(loadedLinks);
       setProducts(loadedProducts);
-      setSelectedId((current) => current ?? loadedIngredients[0]?.id ?? null);
     } catch {
       notify("Impossible de charger les associations d'ingrédients.");
     } finally {
@@ -3667,7 +3668,7 @@ function IngredientAssociationsSection() {
   }
 
   function selectedIngredientName() {
-    return ingredients.find((ingredient) => ingredient.id === selectedId)?.name ?? "un ingrédient Menu Hebdo";
+    return ingredients.find((ingredient) => ingredient.id === selectedId)?.name ?? "Vue globale";
   }
 
   async function addIngredient() {
@@ -3693,6 +3694,8 @@ function IngredientAssociationsSection() {
     setMappings((prev) => prev.map((mapping) => enrichIngredientMapping(mapping, ingredients.map((x) => (x.id === id ? ing : x)))));
     replaceCanonicalIngredientsCache((prev) => prev.map((x) => (x.id === id ? ing : x)));
     invalidateRecipeListCache();
+    setEditingIngredientId(null);
+    setRenameDraft("");
   }
 
   async function deleteIngredient(id: string) {
@@ -3707,7 +3710,18 @@ function IngredientAssociationsSection() {
     replaceCanonicalIngredientsCache((prev) => prev.filter((x) => x.id !== id));
     replaceIngredientLinksCache((prev) => prev.filter((l) => l.canonical_ingredient_id !== id));
     invalidateRecipeListCache();
-    setSelectedId((current) => current === id ? ingredients.find((x) => x.id !== id)?.id ?? null : current);
+    setSelectedId((current) => current === id ? null : current);
+    setEditingIngredientId(null);
+  }
+
+  function startRenameIngredient(ingredient: CanonicalIngredient) {
+    setEditingIngredientId(ingredient.id);
+    setRenameDraft(ingredient.name);
+  }
+
+  async function confirmDeleteIngredient(ingredient: CanonicalIngredient) {
+    if (!confirm(`Supprimer "${ingredient.name}" ? Les associations liées seront retirées.`)) return;
+    await deleteIngredient(ingredient.id);
   }
 
   async function addLink(canonicalIngredientId: string, product: InventoryProduct) {
@@ -3807,17 +3821,19 @@ function IngredientAssociationsSection() {
         .map(logicalLinkId)
     ).size;
   }
-  const selectedMealieCount = mappings.filter((mapping) => mapping.canonical_ingredient_id === selectedId && mapping.status === "confirmed").length;
+  const selectedMealieCount = selectedId
+    ? mappings.filter((mapping) => mapping.canonical_ingredient_id === selectedId && mapping.status === "confirmed").length
+    : mappings.filter((mapping) => mapping.status === "confirmed").length;
   const selectedInventoryCount = selectedId ? logicalInventoryCount(selectedId) : 0;
   const filteredIngredients = ingredients.filter((ingredient) => searchKey(ingredient.name).includes(searchKey(centerQuery)));
   const selectedMappings = mappings
-    .filter((mapping) => mapping.status === "confirmed" && mapping.canonical_ingredient_id === selectedId)
+    .filter((mapping) => mapping.status === "confirmed" && (!selectedId || mapping.canonical_ingredient_id === selectedId))
     .filter((mapping) => searchKey(mapping.mealie_ingredient_text).includes(searchKey(mealieQuery)));
   const pendingMappings = mappings
     .filter((mapping) => mapping.status === "pending")
     .filter((mapping) => searchKey(mapping.mealie_ingredient_text).includes(searchKey(mealieQuery)));
   const otherMappings = mappings
-    .filter((mapping) => mapping.status === "confirmed" && mapping.canonical_ingredient_id !== selectedId)
+    .filter((mapping) => selectedId && mapping.status === "confirmed" && mapping.canonical_ingredient_id !== selectedId)
     .filter((mapping) => searchKey(mapping.mealie_ingredient_text).includes(searchKey(mealieQuery)));
   const ignoredMappings = mappings
     .filter((mapping) => mapping.status === "ignored")
@@ -3825,14 +3841,17 @@ function IngredientAssociationsSection() {
   const selectedLinks = [
     ...new Map(
       links
-        .filter((link) => link.canonical_ingredient_id === selectedId)
+        .filter((link) => !selectedId || link.canonical_ingredient_id === selectedId)
         .map((link) => [logicalLinkId(link), link])
     ).values(),
   ];
   const filteredProducts = products.filter((product) => searchKey(product.name).includes(searchKey(inventoryQuery)));
   const availableProducts = filteredProducts.filter((product) => (
-    linkForProduct(product)?.canonical_ingredient_id !== selectedId
+    selectedId
+      ? linkForProduct(product)?.canonical_ingredient_id !== selectedId
+      : !linkForProduct(product)
   ));
+  const linkedProductCount = new Set(links.map(logicalLinkId)).size;
 
   function renderMappingRow(mapping: IngredientMapping, mode: "selected" | "pending" | "other" | "ignored") {
     const targetName = mapping.canonical_ingredient_name ?? (
@@ -3846,7 +3865,7 @@ function IngredientAssociationsSection() {
           {targetName && <span className="association-row-subtitle">vers {targetName}</span>}
           {mode === "ignored" && <span className="association-row-subtitle">ignoré durablement</span>}
         </div>
-        {mode !== "selected" && selected && (
+        {selected && mode !== "selected" && (
           <button
             className="btn btn-secondary btn-xs"
             type="button"
@@ -3855,7 +3874,7 @@ function IngredientAssociationsSection() {
             Associer
           </button>
         )}
-        {mode !== "ignored" && (
+        {selected && mode !== "ignored" && (
           <button
             className="btn-icon"
             type="button"
@@ -3865,7 +3884,7 @@ function IngredientAssociationsSection() {
             <EyeOff size={13} />
           </button>
         )}
-        {mode === "selected" && (
+        {selected && mode === "selected" && (
           <button
             className="btn-icon"
             type="button"
@@ -3875,7 +3894,7 @@ function IngredientAssociationsSection() {
             <X size={13} />
           </button>
         )}
-        {mode === "ignored" && (
+        {selected && mode === "ignored" && (
           <button
             className="btn btn-secondary btn-xs"
             type="button"
@@ -3919,15 +3938,17 @@ function IngredientAssociationsSection() {
               <input value={mealieQuery} onChange={(e) => setMealieQuery(e.target.value)} placeholder="Rechercher Mealie…" />
             </div>
 
-            <AssociationGroup title={`Associés à ${selectedIngredientName()}`} count={selectedMappings.length}>
+            <AssociationGroup title={selected ? `Associés à ${selectedIngredientName()}` : "Associés"} count={selectedMappings.length}>
               {selectedMappings.map((mapping) => renderMappingRow(mapping, "selected"))}
             </AssociationGroup>
             <AssociationGroup title="Non associés" count={pendingMappings.length}>
               {pendingMappings.map((mapping) => renderMappingRow(mapping, "pending"))}
             </AssociationGroup>
-            <AssociationGroup title="Associés ailleurs" count={otherMappings.length}>
-              {otherMappings.map((mapping) => renderMappingRow(mapping, "other"))}
-            </AssociationGroup>
+            {selected && (
+              <AssociationGroup title="Associés ailleurs" count={otherMappings.length}>
+                {otherMappings.map((mapping) => renderMappingRow(mapping, "other"))}
+              </AssociationGroup>
+            )}
             <AssociationGroup title="Ignorés" count={ignoredMappings.length}>
               {ignoredMappings.map((mapping) => renderMappingRow(mapping, "ignored"))}
             </AssociationGroup>
@@ -3943,6 +3964,19 @@ function IngredientAssociationsSection() {
               <input value={centerQuery} onChange={(e) => setCenterQuery(e.target.value)} placeholder="Rechercher…" />
             </div>
             <div className="association-list association-list-center">
+              <button
+                type="button"
+                className={`ingredient-pivot-row ingredient-pivot-row-global${selectedId === null ? " active" : ""}`}
+                onClick={() => {
+                  setSelectedId(null);
+                  setEditingIngredientId(null);
+                }}
+              >
+                <span className="ingredient-pivot-name">Vue globale</span>
+                <span className="ingredient-pivot-counts">
+                  {mappings.filter((mapping) => mapping.status === "pending").length} Mealie à traiter · {products.length - linkedProductCount} inventaire non associé
+                </span>
+              </button>
               {filteredIngredients.map((ingredient) => {
                 const mealieCount = mappings.filter((mapping) => mapping.status === "confirmed" && mapping.canonical_ingredient_id === ingredient.id).length;
                 const inventoryCount = logicalInventoryCount(ingredient.id);
@@ -3976,21 +4010,54 @@ function IngredientAssociationsSection() {
             {selected && (
               <div className="association-selected-editor">
                 <label>Ingrédient sélectionné</label>
-                <div className="canonical-tag-row">
-                  <input
-                    defaultValue={selected.name}
-                    key={selected.id + selected.name}
-                    onBlur={(e) => e.target.value !== selected.name && renameIngredient(selected.id, e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
-                    className="tag-name-input"
-                  />
-                  <button className="btn-icon" type="button" onClick={() => deleteIngredient(selected.id)} title="Supprimer">
-                    <X size={13} />
-                  </button>
-                </div>
+                {editingIngredientId === selected.id ? (
+                  <div className="association-edit-row">
+                    <input
+                      value={renameDraft}
+                      onChange={(e) => setRenameDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") renameIngredient(selected.id, renameDraft);
+                        if (e.key === "Escape") {
+                          setEditingIngredientId(null);
+                          setRenameDraft("");
+                        }
+                      }}
+                      autoFocus
+                    />
+                    <button className="btn btn-primary btn-xs" type="button" onClick={() => renameIngredient(selected.id, renameDraft)}>
+                      Enregistrer
+                    </button>
+                    <button className="btn btn-secondary btn-xs" type="button" onClick={() => setEditingIngredientId(null)}>
+                      Annuler
+                    </button>
+                  </div>
+                ) : (
+                  <div className="association-selected-card">
+                    <div className="association-selected-main">
+                      <strong>{selected.name}</strong>
+                      <span>{selectedMealieCount} Mealie · {selectedInventoryCount} inventaire</span>
+                    </div>
+                    <button className="btn btn-secondary btn-xs" type="button" onClick={() => startRenameIngredient(selected)}>
+                      <Pencil size={12} /> Renommer
+                    </button>
+                    <button className="btn btn-ghost btn-xs btn-danger-inline" type="button" onClick={() => confirmDeleteIngredient(selected)}>
+                      <Trash2 size={12} /> Supprimer
+                    </button>
+                  </div>
+                )}
                 <div className="association-selected-stats">
                   <span>{selectedMealieCount} ingrédient(s) Mealie</span>
                   <span>{selectedInventoryCount} item(s) inventaire</span>
+                </div>
+              </div>
+            )}
+            {!selected && (
+              <div className="association-selected-editor association-global-summary">
+                <label>Vue globale</label>
+                <div className="association-selected-stats">
+                  <span>{mappings.filter((mapping) => mapping.status === "pending").length} ingrédient(s) Mealie à traiter</span>
+                  <span>{mappings.filter((mapping) => mapping.status === "ignored").length} ignoré(s)</span>
+                  <span>{products.length - linkedProductCount} item(s) inventaire non associé(s)</span>
                 </div>
               </div>
             )}
@@ -4005,7 +4072,7 @@ function IngredientAssociationsSection() {
               <Search size={14} />
               <input value={inventoryQuery} onChange={(e) => setInventoryQuery(e.target.value)} placeholder="Rechercher inventaire…" />
             </div>
-            <AssociationGroup title={`Associés à ${selectedIngredientName()}`} count={selectedLinks.length}>
+            <AssociationGroup title={selected ? `Associés à ${selectedIngredientName()}` : "Associés"} count={selectedLinks.length}>
               {selectedLinks.map((link) => (
                 (() => {
                   const product = productById.get(link.inventory_product_id);

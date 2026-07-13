@@ -1254,6 +1254,9 @@ button.tag-choice {
   background: var(--green-soft);
   box-shadow: inset 3px 0 0 var(--green);
 }
+.ingredient-pivot-row-global {
+  background: var(--bg);
+}
 .ingredient-pivot-name {
   color: var(--ink);
   font-size: 14px;
@@ -1297,6 +1300,52 @@ button.tag-choice {
   margin-top: 8px;
   color: var(--muted);
   font-size: 11px;
+}
+.association-selected-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  background: var(--bg);
+}
+.association-selected-main {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.association-selected-main strong {
+  font-size: 14px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.association-selected-main span {
+  color: var(--muted);
+  font-size: 11px;
+}
+.association-edit-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.association-edit-row input {
+  min-width: 160px;
+  flex: 1;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  font-size: 14px;
+}
+.association-global-summary {
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+}
+.btn-danger-inline {
+  color: var(--red);
 }
 .btn-xs {
   padding: 5px 8px;
