@@ -283,6 +283,16 @@ interface ContextStats {
   by_kind: Record<"away" | "hosting" | "restaurant", ContextStatEntry[]>;
 }
 
+interface ContextHistoryEntry {
+  id: string;
+  slot_date: string;
+  slot_kind: "away" | "hosting" | "restaurant";
+  recipe_name: string;
+  context_id?: string | null;
+  context_name?: string | null;
+  sides: SlotSide[];
+}
+
 type SlotKind = MealSlot["slot_kind"];
 type WizardResult = {
   slotKind: SlotKind;
@@ -3223,6 +3233,9 @@ function StatsScreen() {
   const [historySide, setHistorySide] = useState<SideFreqEntry | null>(null);
   const [sideHistory, setSideHistory] = useState<SideHistoryEntry[]>([]);
   const [sideHistoryLoading, setSideHistoryLoading] = useState(false);
+  const [historyContext, setHistoryContext] = useState<ContextStatEntry | null>(null);
+  const [contextHistory, setContextHistory] = useState<ContextHistoryEntry[]>([]);
+  const [contextHistoryLoading, setContextHistoryLoading] = useState(false);
 
   useEffect(() => {
     loadStats(freqWeeks)
@@ -3276,6 +3289,23 @@ function StatsScreen() {
       notify("Impossible de charger l'historique de l'accompagnement.");
     } finally {
       setSideHistoryLoading(false);
+    }
+  }
+
+  async function openContextHistory(context: ContextStatEntry) {
+    setHistoryContext(context);
+    setContextHistory([]);
+    setContextHistoryLoading(true);
+    const contextIdParam = context.context_id ? `&context_id=${encodeURIComponent(context.context_id)}` : "";
+    try {
+      const rows = await api<ContextHistoryEntry[]>(
+        `/api/stats/context-history?kind=${encodeURIComponent(context.kind)}&context_name=${encodeURIComponent(context.name)}${contextIdParam}&weeks=${freqWeeks}`,
+      );
+      setContextHistory(rows);
+    } catch {
+      notify("Impossible de charger l'historique des sorties.");
+    } finally {
+      setContextHistoryLoading(false);
     }
   }
 
@@ -3551,36 +3581,40 @@ function StatsScreen() {
           <StatsSectionHeader title="Sorties et réceptions" weeks={freqWeeks} onWeeksChange={setFreqWeeks} />
           {contextStats && (
             <>
-              <div className="stats-summary-grid">
-                <div className="stats-summary-item">
-                  <strong>{contextStats.summary.away ?? 0}</strong>
-                  <span>chez proches/amis</span>
-                </div>
-                <div className="stats-summary-item">
-                  <strong>{contextStats.summary.hosting ?? 0}</strong>
-                  <span>réceptions</span>
-                </div>
-                <div className="stats-summary-item">
-                  <strong>{contextStats.summary.restaurant ?? 0}</strong>
-                  <span>restaurants</span>
-                </div>
-              </div>
               {[
-                ["away", "Chez qui on mange"],
-                ["hosting", "Qui on reçoit"],
-                ["restaurant", "Restaurants"],
-              ].map(([kind, title]) => {
-                const rows = contextStats.by_kind[kind as keyof ContextStats["by_kind"]] ?? [];
+                ["restaurant", "Restaurants", "resto"],
+                ["away", "Chez qui on soupe", "sortie"],
+                ["hosting", "Qui on reçoit", "réception"],
+              ].map(([kind, title, countLabel]) => {
+                const contextKind = kind as keyof ContextStats["by_kind"];
+                const rows = contextStats.by_kind[contextKind] ?? [];
+                const total = contextStats.summary[contextKind] ?? 0;
                 return (
                   <div key={kind} style={{ marginTop: 14 }}>
-                    <div className="favorites-label">{title}</div>
+                    <div className="stats-context-title">
+                      <span>{title}</span>
+                      <strong>{total} {countLabel}{total > 1 ? "s" : ""}</strong>
+                    </div>
                     {rows.length === 0 ? (
                       <div className="recipe-last">Pas encore de données</div>
                     ) : (
                       <table className="freq-table">
                         <tbody>
                           {rows.map((r) => (
-                            <tr key={`${r.kind}-${r.context_id ?? r.name}`}>
+                            <tr
+                              key={`${r.kind}-${r.context_id ?? r.name}`}
+                              className="freq-row-clickable"
+                              onClick={() => openContextHistory(r)}
+                              role="button"
+                              tabIndex={0}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                  e.preventDefault();
+                                  openContextHistory(r);
+                                }
+                              }}
+                              title="Voir l'historique"
+                            >
                               <td>{r.name}</td>
                               <td style={{ width: 70 }}>{r.count}×</td>
                               <td style={{ fontSize: 12, color: "var(--muted)" }}>{weeksAgo(r.last_date)}</td>
@@ -3612,6 +3646,15 @@ function StatsScreen() {
           history={sideHistory}
           loading={sideHistoryLoading}
           onClose={() => setHistorySide(null)}
+        />
+      )}
+      {historyContext && (
+        <ContextHistoryModal
+          context={historyContext}
+          weeks={freqWeeks}
+          history={contextHistory}
+          loading={contextHistoryLoading}
+          onClose={() => setHistoryContext(null)}
         />
       )}
     </div>
@@ -3740,6 +3783,77 @@ function SideHistoryModal({
                   <div className="stats-history-detail">
                     {context && <span>{context}</span>}
                     <span>{entry.recipe_name}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function contextKindTitle(kind: ContextStatEntry["kind"]): string {
+  if (kind === "restaurant") return "Restaurant";
+  if (kind === "away") return "Chez qui on soupe";
+  return "Qui on reçoit";
+}
+
+function ContextHistoryModal({
+  context,
+  weeks,
+  history,
+  loading,
+  onClose,
+}: {
+  context: ContextStatEntry;
+  weeks: number;
+  history: ContextHistoryEntry[];
+  loading: boolean;
+  onClose: () => void;
+}) {
+  function detailLabel(entry: ContextHistoryEntry): string {
+    if (entry.slot_kind === "restaurant") return "Restaurant";
+    if (entry.slot_kind === "away") return `Chez ${entry.context_name ?? entry.recipe_name}`;
+    return `Reçoit ${entry.context_name ?? "famille"}`;
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal stats-history-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="stats-history-header">
+          <div>
+            <span className="section-label">{contextKindTitle(context.kind)}</span>
+            <h2>{context.name}</h2>
+          </div>
+          <button className="btn-icon" onClick={onClose} title="Fermer">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="stats-history-summary">
+          <span><strong>{context.count}</strong> fois sur {statsPeriodLabel(weeks)}</span>
+          <span>Dernière fois : {weeksAgo(context.last_date)}</span>
+        </div>
+
+        {loading ? (
+          <div className="empty-state"><p>Chargement…</p></div>
+        ) : history.length === 0 ? (
+          <div className="empty-state"><p>Aucun historique détaillé dans cette période</p></div>
+        ) : (
+          <div className="stats-history-list">
+            {history.map((entry) => {
+              const sides = entry.sides.map((side) => side.name).filter(Boolean).join(", ");
+              return (
+                <div key={entry.id} className="stats-history-row">
+                  <div className="stats-history-date">
+                    <strong>{fmtDateFull(entry.slot_date)}</strong>
+                    <span>{weeksAgo(entry.slot_date)}</span>
+                  </div>
+                  <div className="stats-history-detail">
+                    <span>{detailLabel(entry)}</span>
+                    {entry.slot_kind === "hosting" && <span>{[entry.recipe_name, sides].filter(Boolean).join(" · ")}</span>}
                   </div>
                 </div>
               );

@@ -55,6 +55,7 @@ from menu_app.store import (
     list_slots_for_plan,
     list_slots_for_range,
     list_tag_mappings,
+    meal_context_history,
     meal_side_associations,
     meal_context_stats,
     move_slot,
@@ -1421,6 +1422,18 @@ def api_context_stats(
     actor: Actor = Depends(require_permission("menu.read")),
 ) -> dict[str, Any]:
     return meal_context_stats(weeks)
+
+
+@app.get("/api/stats/context-history")
+def api_context_history(
+    kind: str,
+    context_name: str,
+    context_id: str | None = None,
+    weeks: int = 12,
+    limit: int = 50,
+    actor: Actor = Depends(require_permission("menu.read")),
+) -> list[dict]:
+    return meal_context_history(kind, context_name, context_id, weeks, limit)
 
 
 @app.get("/api/plans")
