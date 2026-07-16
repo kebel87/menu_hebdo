@@ -12,7 +12,7 @@ from typing import Any, Iterator
 DATA_DIR = Path(os.getenv("MENU_DATA_DIR", Path(__file__).resolve().parents[2] / "data"))
 DB_PATH = DATA_DIR / "menu.db"
 SCHEMA_VERSION = "menu_hebdo_v1"
-DEFAULT_RECIPE_CATEGORY_TAGS = ("Boeuf", "Poulet", "Porc", "Poisson", "Végé")
+DEFAULT_RECIPE_CATEGORY_TAGS = ("Boeuf", "Pâtes", "Poulet", "Porc", "Poisson", "Végé")
 
 
 def now_iso() -> str:
@@ -371,7 +371,7 @@ def _seed_default_recipe_category_tags(db: sqlite3.Connection) -> None:
             continue
         db.execute(
             """INSERT INTO canonical_tags (id, name, description, color, is_filter, created_at)
-               VALUES (?, ?, '', '', 0, ?)""",
+               VALUES (?, ?, '', '', 1, ?)""",
             (new_id(), tag_name, now),
         )
 

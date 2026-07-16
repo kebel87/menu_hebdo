@@ -630,8 +630,22 @@ function useFilterableTags(): CanonicalTag[] {
   const [tags, setTags] = useState<CanonicalTag[]>([]);
   useEffect(() => {
     api<CanonicalTag[]>("/api/tags")
-      .then((t) => setTags(t.filter((x) => x.is_filter).sort((a, b) => a.name.localeCompare(b.name))))
+      .then((t) => setTags(t.filter((x) => x.is_filter && !isSystemRecipeTag(x)).sort((a, b) => a.name.localeCompare(b.name))))
       .catch(() => notify("Impossible de charger les tags de filtre."));
+  }, []);
+  return tags;
+}
+
+function isSystemRecipeTag(tag: CanonicalTag): boolean {
+  return ["weekend", "lunchs"].includes(tag.name.trim().toLowerCase());
+}
+
+function useRecipeCategoryTags(): CanonicalTag[] {
+  const [tags, setTags] = useState<CanonicalTag[]>([]);
+  useEffect(() => {
+    api<CanonicalTag[]>("/api/tags")
+      .then((t) => setTags(t.filter((x) => !isSystemRecipeTag(x)).sort((a, b) => a.name.localeCompare(b.name))))
+      .catch(() => notify("Impossible de charger les catégories."));
   }, []);
   return tags;
 }
@@ -2000,13 +2014,20 @@ type RecipeSortMode = "name" | "frequent" | "recent" | "stale" | "prep";
 function RecipesScreen({ canEdit }: { canEdit: boolean }) {
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [q, setQ] = useState("");
-  const [filters, setFilters] = useState<Set<string>>(new Set());
+  const [availableOnly, setAvailableOnly] = useState(false);
+  const [quickOnly, setQuickOnly] = useState(false);
+  const [showHidden, setShowHidden] = useState(false);
+  const [categoryFilter, setCategoryFilter] = useState("");
+  const [likedByFilter, setLikedByFilter] = useState("");
+  const [filterMenu, setFilterMenu] = useState<"category" | "likedBy" | null>(null);
   const [sort, setSort] = useState<RecipeSortMode>("name");
   const [loading, setLoading] = useState(true);
   const [detail, setDetail] = useState<Recipe | null>(null);
   const [showAddLocal, setShowAddLocal] = useState(false);
-  const filterTags = useFilterableTags();
+  const categoryTags = useRecipeCategoryTags();
   const children = usePeople();
+  const selectedCategory = categoryTags.find((t) => t.id === categoryFilter);
+  const selectedLikedBy = children.find((c) => c.id === likedByFilter);
 
   useEffect(() => {
     loadRecipeList()
@@ -2014,26 +2035,13 @@ function RecipesScreen({ canEdit }: { canEdit: boolean }) {
       .finally(() => setLoading(false));
   }, []);
 
-  function toggleFilter(f: string) {
-    setFilters((prev) => {
-      const n = new Set(prev);
-      n.has(f) ? n.delete(f) : n.add(f);
-      return n;
-    });
-  }
-
-  const showHidden = filters.has("masquees");
   const filtered = recipes.filter((r) => {
     if (r.is_hidden !== showHidden) return false;
     if (q && !searchKey(r.name).includes(searchKey(q))) return false;
-    if (filters.has("rapide") && (!r.prep_minutes || r.prep_minutes > 30)) return false;
-    if (filters.has("dispo") && (r.inventory_score?.score ?? 0) < 0.8) return false;
-    for (const t of filterTags) {
-      if (filters.has(t.id) && !hasTag(r, t.id)) return false;
-    }
-    for (const c of children) {
-      if (filters.has(c.id) && !r.liked_by.includes(c.id)) return false;
-    }
+    if (quickOnly && (!r.prep_minutes || r.prep_minutes > 30)) return false;
+    if (availableOnly && (r.inventory_score?.score ?? 0) < 0.8) return false;
+    if (categoryFilter && !hasTag(r, categoryFilter)) return false;
+    if (likedByFilter && !r.liked_by.includes(likedByFilter)) return false;
     return true;
   });
 
@@ -2067,34 +2075,37 @@ function RecipesScreen({ canEdit }: { canEdit: boolean }) {
           </button>
         )}
       </div>
-      <div className="filter-chips">
-        {["dispo", "rapide", "masquees"].map((f) => (
-          <button
-            key={f}
-            className={`filter-chip${filters.has(f) ? " active" : ""}`}
-            onClick={() => toggleFilter(f)}
-          >
-            {f === "dispo" ? "Disponible" : f === "rapide" ? "< 30 min" : "Masquées"}
-          </button>
-        ))}
-        {filterTags.map((t) => (
-          <button
-            key={t.id}
-            className={`filter-chip${filters.has(t.id) ? " active" : ""}`}
-            onClick={() => toggleFilter(t.id)}
-          >
-            {t.name}
-          </button>
-        ))}
-        {children.map((c) => (
-          <button
-            key={c.id}
-            className={`filter-chip${filters.has(c.id) ? " active" : ""}`}
-            onClick={() => toggleFilter(c.id)}
-          >
-            {c.name}
-          </button>
-        ))}
+      <div className="filter-toolbar">
+        <button
+          type="button"
+          className={`filter-chip${availableOnly ? " active" : ""}`}
+          onClick={() => setAvailableOnly((v) => !v)}
+        >
+          Disponible
+        </button>
+        <button
+          type="button"
+          className={`filter-chip${quickOnly ? " active" : ""}`}
+          onClick={() => setQuickOnly((v) => !v)}
+        >
+          &lt; 30 min
+        </button>
+        <button
+          type="button"
+          className={`filter-chip filter-select-trigger${categoryFilter ? " active" : ""}`}
+          onClick={() => setFilterMenu("category")}
+        >
+          {selectedCategory ? `${selectedCategory.name} ×` : "Catégorie"}
+          {!selectedCategory && <ChevronDown size={13} />}
+        </button>
+        <button
+          type="button"
+          className={`filter-chip filter-select-trigger${likedByFilter ? " active" : ""}`}
+          onClick={() => setFilterMenu("likedBy")}
+        >
+          {selectedLikedBy ? `${selectedLikedBy.name} ×` : "Aimé par"}
+          {!selectedLikedBy && <ChevronDown size={13} />}
+        </button>
       </div>
       <div className="sort-row">
         <label htmlFor="recipe-sort">Trier :</label>
@@ -2105,7 +2116,79 @@ function RecipesScreen({ canEdit }: { canEdit: boolean }) {
           <option value="stale">Pas mangé depuis longtemps</option>
           <option value="prep">Temps de préparation</option>
         </select>
+        <button
+          type="button"
+          className={`hidden-filter-toggle${showHidden ? " active" : ""}`}
+          onClick={() => setShowHidden((v) => !v)}
+        >
+          <EyeOff size={13} /> Masquées
+        </button>
       </div>
+      {filterMenu && (
+        <div className="filter-sheet-backdrop" onClick={() => setFilterMenu(null)}>
+          <div className="filter-sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="filter-sheet-header">
+              <strong>{filterMenu === "category" ? "Catégorie" : "Aimé par"}</strong>
+              <button className="btn-icon" type="button" onClick={() => setFilterMenu(null)}>
+                <X size={16} />
+              </button>
+            </div>
+            {filterMenu === "category" ? (
+              <div className="filter-options">
+                <button
+                  type="button"
+                  className={`filter-option${!categoryFilter ? " selected" : ""}`}
+                  onClick={() => {
+                    setCategoryFilter("");
+                    setFilterMenu(null);
+                  }}
+                >
+                  Toutes les catégories
+                </button>
+                {categoryTags.map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    className={`filter-option${categoryFilter === t.id ? " selected" : ""}`}
+                    onClick={() => {
+                      setCategoryFilter(t.id);
+                      setFilterMenu(null);
+                    }}
+                  >
+                    {t.name}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="filter-options">
+                <button
+                  type="button"
+                  className={`filter-option${!likedByFilter ? " selected" : ""}`}
+                  onClick={() => {
+                    setLikedByFilter("");
+                    setFilterMenu(null);
+                  }}
+                >
+                  Tout le monde
+                </button>
+                {children.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    className={`filter-option${likedByFilter === c.id ? " selected" : ""}`}
+                    onClick={() => {
+                      setLikedByFilter(c.id);
+                      setFilterMenu(null);
+                    }}
+                  >
+                    {c.name}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       {loading ? (
         <div className="empty-state"><RefreshCw size={24} /></div>
       ) : (
@@ -2566,7 +2649,7 @@ function RecipeDetailModal({
   useEffect(() => {
     if (recipe.source !== "local") return;
     api<CanonicalTag[]>("/api/tags")
-      .then((t) => setAllTags([...t].filter((tag) => !tag.is_filter).sort((a, b) => a.name.localeCompare(b.name))))
+      .then((t) => setAllTags([...t].filter((tag) => !isSystemRecipeTag(tag)).sort((a, b) => a.name.localeCompare(b.name))))
       .catch(() => notify("Impossible de charger les catégories."));
     loadCanonicalIngredients()
       .then((t) => setAllIngredients([...t].sort((a, b) => a.name.localeCompare(b.name))))
@@ -2889,7 +2972,7 @@ function LocalRecipeModal({
 
   useEffect(() => {
     api<CanonicalTag[]>("/api/tags")
-      .then((t) => setAllTags([...t].filter((tag) => !tag.is_filter).sort((a, b) => a.name.localeCompare(b.name))))
+      .then((t) => setAllTags([...t].filter((tag) => !isSystemRecipeTag(tag)).sort((a, b) => a.name.localeCompare(b.name))))
       .catch(() => notify("Impossible de charger les catégories."));
     loadCanonicalIngredients()
       .then((t) => setAllIngredients([...t].sort((a, b) => a.name.localeCompare(b.name))))
