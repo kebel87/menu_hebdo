@@ -2119,26 +2119,9 @@ function RecipesScreen({ canEdit }: { canEdit: boolean }) {
               <div key={key} className="recipe-card" onClick={() => setDetail(r)}>
                 <div className="recipe-card-header">
                   <span className="recipe-card-name">{r.name}</span>
-                  <span className={`source-badge ${r.source}`}>
-                    {r.source === "mealie" ? "Mealie" : "Local"}
-                  </span>
                 </div>
-                {r.tags.length > 0 && (
-                  <div className="recipe-card-tags">
-                    {r.tags.map((t) => (
-                      <span
-                        key={t.id}
-                        className="badge tag-badge"
-                        style={{ background: t.color || DEFAULT_TAG_COLOR, color: readableTextColor(t.color || DEFAULT_TAG_COLOR) }}
-                      >
-                        {t.name}
-                      </span>
-                    ))}
-                  </div>
-                )}
                 <div className="recipe-card-meta">
                   {r.makes_lunch && <span className="badge badge-lunch">Lunch</span>}
-                  {r.is_weekend && <span className="badge badge-weekend">Weekend</span>}
                   {r.prep_minutes && (
                     <span className="recipe-last">{r.prep_minutes} min</span>
                   )}
@@ -2147,21 +2130,8 @@ function RecipesScreen({ canEdit }: { canEdit: boolean }) {
                       {Math.round(r.inventory_score.score * 100)}% dispo
                     </span>
                   )}
-                  {r.liked_by.length > 0 && (
-                    <span className="presence-tags">
-                      {r.liked_by.map((childId) => {
-                        const child = children.find((c) => c.id === childId);
-                        return (
-                          <span key={childId} className="presence-tag" style={presenceTagStyle(child)} title={child?.name ?? childId}>
-                            {child?.short_label ?? childId[0]?.toUpperCase()}
-                          </span>
-                        );
-                      })}
-                    </span>
-                  )}
                   <span className="recipe-last">
                     {r.last_used ? `${weeksAgo(r.last_used)}` : "Jamais mangé"}
-                    {r.total_count ? ` · ${r.total_count}×` : ""}
                   </span>
                 </div>
               </div>
@@ -2682,9 +2652,6 @@ function RecipeDetailModal({
       <div className="modal recipe-detail-modal" onClick={(e) => e.stopPropagation()}>
         <div className="recipe-detail-header">
           <div className="recipe-detail-title-block">
-            <span className={`source-badge ${recipe.source}`}>
-              {recipe.source === "mealie" ? "Mealie" : "Locale"}
-            </span>
             <h2>{recipe.source === "local" ? name : recipe.name}</h2>
             <div className="recipe-detail-meta">
               {(recipe.source === "local" ? prep : recipe.prep_minutes) && (
