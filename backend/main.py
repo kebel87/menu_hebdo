@@ -437,8 +437,12 @@ def put_slot(
             raise HTTPException(status_code=422, detail="restaurant requis")
         if slot_kind == "away" and context.get("kind") != "people":
             raise HTTPException(status_code=422, detail="personne/foyer requis")
-        source = "free"
-        recipe_name = recipe_name or context["name"]
+        if slot_kind == "away":
+            source = "free"
+            recipe_name = context["name"]
+        elif source not in ("mealie", "local") or not recipe_name:
+            source = "free"
+            recipe_name = context["name"]
     elif slot_kind == "hosting":
         if not context_id:
             raise HTTPException(status_code=422, detail="context_id requis")

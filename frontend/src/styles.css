@@ -1138,6 +1138,17 @@ body {
   text-transform: none;
   white-space: nowrap;
 }
+.stats-context-table {
+  table-layout: fixed;
+}
+.stats-context-table td:nth-child(2) {
+  width: 52px;
+  text-align: right;
+}
+.stats-context-table td:nth-child(3) {
+  width: 118px;
+  text-align: right;
+}
 
 /* ── Paramètres ── */
 .settings-tabs { margin-bottom: 16px; }

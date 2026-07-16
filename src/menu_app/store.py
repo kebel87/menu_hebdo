@@ -1438,12 +1438,15 @@ def recipe_history(recipe_name: str, weeks: int = 12, limit: int = 50) -> list[d
     with connect() as db:
         rows = db.execute(
             """SELECT ms.id, ms.slot_date, ms.slot_kind, ms.recipe_name,
-                      ms.context_id, mc.name as context_name
+                      ms.recipe_source, ms.context_id, mc.name as context_name
                FROM meal_slots ms
                LEFT JOIN meal_contexts mc ON mc.id = ms.context_id
                WHERE ms.recipe_name = ?
                  AND ms.slot_date >= date('now', ? || ' days')
-                 AND ms.slot_kind IN ('recipe', 'hosting')
+                 AND (
+                   ms.slot_kind IN ('recipe', 'hosting')
+                   OR (ms.slot_kind = 'restaurant' AND ms.recipe_source != 'free')
+                 )
                ORDER BY ms.slot_date DESC
                LIMIT ?""",
             (recipe_name.strip(), f"-{weeks * 7}", limit),
@@ -1462,7 +1465,10 @@ def recipe_usage_stats() -> dict[str, dict[str, Any]]:
     with connect() as db:
         rows = db.execute(
             "SELECT recipe_name, COUNT(*) as count, MAX(slot_date) as last_date "
-            "FROM meal_slots WHERE slot_kind IN ('recipe', 'hosting') GROUP BY recipe_name"
+            """FROM meal_slots
+               WHERE slot_kind IN ('recipe', 'hosting')
+                  OR (slot_kind = 'restaurant' AND recipe_source != 'free')
+               GROUP BY recipe_name"""
         ).fetchall()
         return {r["recipe_name"]: {"count": r["count"], "last_date": r["last_date"]} for r in rows}
 
@@ -1477,7 +1483,10 @@ def recipe_frequency(weeks: int = 12) -> list[dict[str, Any]]:
                       MIN(slot_date) as first_date
                FROM meal_slots
                WHERE slot_date >= date('now', ? || ' days')
-                 AND slot_kind IN ('recipe', 'hosting')
+                 AND (
+                   slot_kind IN ('recipe', 'hosting')
+                   OR (slot_kind = 'restaurant' AND recipe_source != 'free')
+                 )
                GROUP BY recipe_name
                ORDER BY count DESC""",
             (f"-{weeks * 7}",),
@@ -1524,7 +1533,7 @@ def meal_context_history(
     context_key = context_id if context_id else context_name.strip()
     with connect() as db:
         rows = db.execute(
-            f"""SELECT ms.id, ms.slot_date, ms.slot_kind, ms.recipe_name,
+            f"""SELECT ms.id, ms.slot_date, ms.slot_kind, ms.recipe_source, ms.recipe_name,
                        ms.context_id, COALESCE(mc.name, ms.recipe_name) as context_name
                 FROM meal_slots ms
                 LEFT JOIN meal_contexts mc ON mc.id = ms.context_id

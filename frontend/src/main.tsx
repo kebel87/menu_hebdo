@@ -231,7 +231,8 @@ interface HistoryResult {
 interface RecipeHistoryEntry {
   id: string;
   slot_date: string;
-  slot_kind: "recipe" | "hosting";
+  slot_kind: "recipe" | "hosting" | "restaurant";
+  recipe_source: "mealie" | "local" | "free";
   recipe_name: string;
   context_id?: string | null;
   context_name?: string | null;
@@ -287,6 +288,7 @@ interface ContextHistoryEntry {
   id: string;
   slot_date: string;
   slot_kind: "away" | "hosting" | "restaurant";
+  recipe_source: "mealie" | "local" | "free";
   recipe_name: string;
   context_id?: string | null;
   context_name?: string | null;
@@ -298,6 +300,7 @@ type WizardResult = {
   slotKind: SlotKind;
   contextId?: string;
   contextName?: string;
+  restaurantMealEnabled?: boolean;
   recipe: Recipe | null;
   sides: SlotSide[] | null;
 };
@@ -841,15 +844,21 @@ function slotKindLabel(kind?: SlotKind): string {
   return "Maison";
 }
 
+function restaurantSlotHasMeal(slot: MealSlot | ContextHistoryEntry): boolean {
+  return slot.slot_kind === "restaurant" && slot.recipe_source !== "free";
+}
+
 function slotTitle(slot: MealSlot): string {
   if (slot.slot_kind === "away") return `Chez ${slot.context?.name ?? slot.recipe_name}`;
-  if (slot.slot_kind === "restaurant") return slot.context?.name ?? slot.recipe_name;
+  if (slot.slot_kind === "restaurant") {
+    return restaurantSlotHasMeal(slot) ? slot.recipe_name : slot.context?.name ?? slot.recipe_name;
+  }
   return slot.recipe_name;
 }
 
 function slotSubtitle(slot: MealSlot): string {
   if (slot.slot_kind === "hosting") return `Reçoit ${slot.context?.name ?? "famille"}`;
-  if (slot.slot_kind === "restaurant") return "Restaurant";
+  if (slot.slot_kind === "restaurant") return restaurantSlotHasMeal(slot) ? `Resto · ${slot.context?.name ?? "restaurant"}` : "Restaurant";
   if (slot.sides.length > 0) return slot.sides.map((s) => s.name).join(", ");
   return "";
 }
@@ -1176,7 +1185,7 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
   async function handleWizardComplete(slotDate: string, result: WizardResult) {
     try {
       let updated: MealSlot | null = null;
-      if (result.slotKind === "away" || result.slotKind === "restaurant") {
+      if (result.slotKind === "away") {
         updated = await api<MealSlot>(`/api/week/${weekStart}/slot/${slotDate}`, {
           method: "PUT",
           body: JSON.stringify({
@@ -1185,6 +1194,33 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
             recipe_source: "free",
             recipe_name: result.contextName,
           }),
+        });
+        setSlots((prev) => [...prev.filter((s) => s.slot_date !== slotDate), updated!]);
+      } else if (result.slotKind === "restaurant") {
+        const existing = slotByDate(slotDate);
+        const body: Record<string, unknown> = {
+          slot_kind: result.slotKind,
+          context_id: result.contextId,
+        };
+        if (result.restaurantMealEnabled && result.recipe) {
+          body.recipe_source = result.recipe.source;
+          body.recipe_name = result.recipe.name;
+          body.makes_lunch = result.recipe.makes_lunch;
+          if (result.recipe.source === "mealie") body.mealie_slug = result.recipe.slug;
+          if (result.recipe.source === "local") body.local_recipe_id = result.recipe.id;
+        } else if (result.restaurantMealEnabled && existing?.slot_kind === "restaurant" && restaurantSlotHasMeal(existing)) {
+          body.recipe_source = existing.recipe_source;
+          body.recipe_name = existing.recipe_name;
+          body.makes_lunch = existing.makes_lunch;
+          if (existing.recipe_source === "mealie") body.mealie_slug = existing.mealie_slug;
+          if (existing.recipe_source === "local") body.local_recipe_id = existing.local_recipe_id;
+        } else {
+          body.recipe_source = "free";
+          body.recipe_name = result.contextName;
+        }
+        updated = await api<MealSlot>(`/api/week/${weekStart}/slot/${slotDate}`, {
+          method: "PUT",
+          body: JSON.stringify(body),
         });
         setSlots((prev) => [...prev.filter((s) => s.slot_date !== slotDate), updated!]);
       } else if (result.recipe) {
@@ -1647,6 +1683,7 @@ function MealWizard({
   const [chosenSides, setChosenSides] = useState<SlotSide[]>(
     mode === "meal" || mode === "sides" || mode === "edit" ? (slot?.sides ?? []) : []
   );
+  const [restaurantMealEnabled, setRestaurantMealEnabled] = useState(() => !!slot && restaurantSlotHasMeal(slot));
   const [mealChanged, setMealChanged] = useState(false);
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [favorites, setFavorites] = useState<Recipe[]>([]);
@@ -1705,6 +1742,9 @@ function MealWizard({
     if (mode === "meal") {
       // Le repas seul change : on garde l'accompagnement existant, étape sides sautée.
       setStep("confirm");
+    } else if (slotKind === "restaurant") {
+      setChosenSides([]);
+      setStep("confirm");
     } else {
       setChosenSides([]);
       setStep("sides");
@@ -1717,12 +1757,14 @@ function MealWizard({
       slotKind,
       contextId: contextId || undefined,
       contextName: context?.name,
+      restaurantMealEnabled,
       recipe: mode === "sides" || (mode === "edit" && !mealChanged) ? null : chosenRecipe,
       sides: mode === "meal" ? null : chosenSides,
     });
   }
 
-  const needsRecipe = slotKind === "recipe" || slotKind === "hosting";
+  const needsRecipe = slotKind === "recipe" || slotKind === "hosting" || (slotKind === "restaurant" && restaurantMealEnabled);
+  const needsSides = needsRecipe && slotKind !== "restaurant";
   const needsContext = slotKind === "away" || slotKind === "hosting" || slotKind === "restaurant";
   const contextChoices = contexts.filter((c) =>
     slotKind === "restaurant" ? c.kind === "restaurant" : c.kind === "people"
@@ -1735,7 +1777,7 @@ function MealWizard({
 
   const steps = mode === "meal" ? ["Repas", "Confirmer"]
     : mode === "sides" ? ["Accompagnement", "Confirmer"]
-    : needsRecipe ? ["Repas", "Accompagnement", "Confirmer"] : ["Sortie", "Confirmer"];
+    : needsRecipe ? (needsSides ? ["Repas", "Accompagnement", "Confirmer"] : ["Repas", "Confirmer"]) : ["Sortie", "Confirmer"];
   const currentIndex = step === "confirm" ? steps.length - 1
     : step === "sides" ? (mode === "sides" ? 0 : 1)
     : 0;
@@ -1745,7 +1787,9 @@ function MealWizard({
     : slotKind === "away"
       ? `Chez ${selectedContext?.name ?? ""}`
       : slotKind === "restaurant"
-        ? selectedContext?.name
+        ? restaurantMealEnabled
+          ? chosenRecipe?.name ?? (slot?.slot_kind === "restaurant" && restaurantSlotHasMeal(slot) ? slot.recipe_name : selectedContext?.name)
+          : selectedContext?.name
         : chosenRecipe?.name;
 
   function chooseSlotKind(kind: SlotKind) {
@@ -1753,6 +1797,7 @@ function MealWizard({
     setContextId("");
     setChosenRecipe(null);
     setChosenSides([]);
+    setRestaurantMealEnabled(false);
     setMealChanged(true);
     setMealListOpen(false);
     setShowAllMeals(false);
@@ -1764,19 +1809,21 @@ function MealWizard({
   }
 
   function continueAfterContext() {
-    if (slotKind === "away" || slotKind === "restaurant") {
+    if (slotKind === "away" || (slotKind === "restaurant" && !restaurantMealEnabled)) {
       setStep(mode === "edit" ? "edit" : "confirm");
     }
   }
 
   const editMealLabel = chosenRecipe?.name
     ?? (slotKind === "away" ? `Chez ${selectedContext?.name ?? slot?.context?.name ?? slot?.recipe_name ?? ""}`
-      : slotKind === "restaurant" ? selectedContext?.name ?? slot?.context?.name ?? slot?.recipe_name
+      : slotKind === "restaurant" ? chosenRecipe?.name ?? (restaurantMealEnabled && slot?.slot_kind === "restaurant" && restaurantSlotHasMeal(slot) ? slot.recipe_name : selectedContext?.name ?? slot?.context?.name ?? slot?.recipe_name)
         : slot ? slotTitle(slot) : "");
   const editCanSave = canEdit && (
     step !== "edit" || (
-      (slotKind === "away" || slotKind === "restaurant")
+      slotKind === "away"
         ? !!contextId
+        : slotKind === "restaurant"
+          ? !!contextId && (!restaurantMealEnabled || !!chosenRecipe || (!!slot && restaurantSlotHasMeal(slot)))
         : slotKind === "hosting"
           ? !!contextId && (!!chosenRecipe || !mealChanged)
           : !!chosenRecipe || !mealChanged
@@ -1876,13 +1923,31 @@ function MealWizard({
               </div>
             )}
 
+            {slotKind === "restaurant" && (
+              <div className="form-row">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={restaurantMealEnabled}
+                    onChange={(e) => {
+                      setRestaurantMealEnabled(e.target.checked);
+                      setMealChanged(true);
+                      if (!e.target.checked) setChosenRecipe(null);
+                    }}
+                    style={{ marginRight: 6 }}
+                  />
+                  Associer un repas
+                </label>
+              </div>
+            )}
+
             {!needsRecipe && (
               <>
                 <div className="form-actions">
                   <button className="btn btn-primary" onClick={continueAfterContext} disabled={!contextId}>
                     {mode === "edit" ? "Appliquer" : "Continuer"}
                   </button>
-                  {mode === "edit" && (
+                    {mode === "edit" && (
                     <button className="btn btn-secondary" onClick={() => setStep("edit")}>
                       Retour
                     </button>
@@ -2033,6 +2098,11 @@ function MealWizard({
               {slotKind === "hosting" && selectedContext && (
                 <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
                   Reçoit {selectedContext.name}
+                </div>
+              )}
+              {slotKind === "restaurant" && restaurantMealEnabled && selectedContext && (
+                <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
+                  Resto · {selectedContext.name}
                 </div>
               )}
               <div className="sides-list" style={{ marginTop: 6 }}>
@@ -3598,7 +3668,7 @@ function StatsScreen() {
                     {rows.length === 0 ? (
                       <div className="recipe-last">Pas encore de données</div>
                     ) : (
-                      <table className="freq-table">
+                      <table className="freq-table stats-context-table">
                         <tbody>
                           {rows.map((r) => (
                             <tr
@@ -3680,6 +3750,7 @@ function RecipeHistoryModal({
 }) {
   function contextLabel(entry: RecipeHistoryEntry): string | null {
     if (entry.slot_kind === "hosting") return `Reçoit ${entry.context_name ?? "famille"}`;
+    if (entry.slot_kind === "restaurant") return `Resto · ${entry.context_name ?? "restaurant"}`;
     return null;
   }
 
@@ -3853,6 +3924,7 @@ function ContextHistoryModal({
                   </div>
                   <div className="stats-history-detail">
                     <span>{detailLabel(entry)}</span>
+                    {entry.slot_kind === "restaurant" && restaurantSlotHasMeal(entry) && <span>{entry.recipe_name}</span>}
                     {entry.slot_kind === "hosting" && <span>{[entry.recipe_name, sides].filter(Boolean).join(" · ")}</span>}
                   </div>
                 </div>
