@@ -632,7 +632,7 @@ function useFilterableTags(): CanonicalTag[] {
   useEffect(() => {
     api<CanonicalTag[]>("/api/tags")
       .then((t) => setTags(t.filter((x) => x.is_filter && !isSystemRecipeTag(x)).sort((a, b) => a.name.localeCompare(b.name))))
-      .catch(() => notify("Impossible de charger les tags de filtre."));
+      .catch(() => notify("Impossible de charger les catégories de filtre."));
   }, []);
   return tags;
 }
@@ -2420,9 +2420,6 @@ function SidesScreen() {
                   <SideUsageMeta side={s} />
                 </div>
               </div>
-              <div className="side-library-actions">
-                <Pencil size={15} aria-hidden="true" />
-              </div>
             </button>
           ))}
         </div>
@@ -3173,6 +3170,13 @@ function LocalRecipeModal({
 
 // ─── StatsScreen ──────────────────────────────────────────────────────────────
 
+const STATS_PERIODS = [
+  { label: "1 mois", weeks: 4 },
+  { label: "3 mois", weeks: 13 },
+  { label: "6 mois", weeks: 26 },
+  { label: "12 mois", weeks: 52 },
+];
+
 function StatsScreen() {
   const [tab, setTab] = useState<"meals" | "sides" | "associations" | "contexts">("meals");
   const [q, setQ] = useState("");
@@ -3516,13 +3520,13 @@ function StatsSectionHeader({
     <div className="stats-section-header">
       <h2>{title}</h2>
       <div className="filter-chips">
-        {[4, 8, 12].map((w) => (
+        {STATS_PERIODS.map((period) => (
           <button
-            key={w}
-            className={`filter-chip${weeks === w ? " active" : ""}`}
-            onClick={() => onWeeksChange(w)}
+            key={period.weeks}
+            className={`filter-chip${weeks === period.weeks ? " active" : ""}`}
+            onClick={() => onWeeksChange(period.weeks)}
           >
-            {w} sem.
+            {period.label}
           </button>
         ))}
       </div>
@@ -3545,15 +3549,14 @@ function associationSideKey(association: Pick<MealSideAssociation, "side_id" | "
 
 // ─── SettingsScreen ───────────────────────────────────────────────────────────
 
-type SettingsTab = "general" | "meals" | "inventory" | "family" | "contexts" | "notifications";
+type SettingsTab = "general" | "recipes" | "ingredients" | "family" | "places" | "notifications";
 
 const ADMIN_SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
   { id: "general", label: "Général" },
-  { id: "meals", label: "Repas" },
-  { id: "inventory", label: "Inventaire" },
+  { id: "recipes", label: "Recettes" },
+  { id: "ingredients", label: "Ingrédients" },
   { id: "family", label: "Famille" },
-  { id: "contexts", label: "Sorties" },
-  { id: "notifications", label: "Notifications" },
+  { id: "places", label: "Lieux" },
 ];
 
 const BASIC_SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
@@ -3585,12 +3588,13 @@ function SettingsScreen({ canAdmin }: { canAdmin: boolean }) {
       {canAdmin && tab === "general" && (
         <>
           <SyncSection />
+          <NotificationsSection />
         </>
       )}
-      {canAdmin && tab === "meals" && (
+      {canAdmin && tab === "recipes" && (
         <>
-          <TagMappingsSection />
           <CanonicalTagsSection />
+          <TagMappingsSection />
         </>
       )}
       {canAdmin && tab === "family" && (
@@ -3599,10 +3603,10 @@ function SettingsScreen({ canAdmin }: { canAdmin: boolean }) {
           <FamilyMembersSection />
         </>
       )}
-      {canAdmin && tab === "inventory" && (
+      {canAdmin && tab === "ingredients" && (
         <IngredientAssociationsSection />
       )}
-      {canAdmin && tab === "contexts" && <MealContextsSection />}
+      {canAdmin && tab === "places" && <MealContextsSection />}
       {tab === "notifications" && <NotificationsSection />}
     </div>
   );
@@ -3632,8 +3636,8 @@ function SyncSection() {
         </button>
       </div>
       <p style={{ fontSize: 12, color: "var(--muted)", margin: "6px 0 0" }}>
-        Les recettes Mealie et la présence des enfants sont rafraîchies automatiquement toutes les 30 minutes.
-        Utilise ce bouton pour forcer une mise à jour immédiate.
+        La présence des enfants est rafraîchie régulièrement. Les recettes Mealie utilisent un cache longue durée
+        avec rafraîchissement nocturne; ce bouton force une mise à jour immédiate.
       </p>
     </div>
   );
@@ -3645,8 +3649,8 @@ function TagMappingsSection() {
   const [syncing, setSyncing] = useState(false);
 
   useEffect(() => {
-    loadTagMappings().then(setMappings).catch(() => notify("Impossible de charger les mappings de tags."));
-    loadCanonicalTags().then(setTags).catch(() => notify("Impossible de charger les tags."));
+    loadTagMappings().then(setMappings).catch(() => notify("Impossible de charger les associations de tags Mealie."));
+    loadCanonicalTags().then(setTags).catch(() => notify("Impossible de charger les catégories."));
   }, []);
 
   async function confirm(mapping: TagMapping, canonicalId: string | undefined, status: string) {
@@ -3678,7 +3682,7 @@ function TagMappingsSection() {
   return (
     <div className="settings-section">
       <div style={{ display: "flex", alignItems: "center", marginBottom: 10 }}>
-        <h2 style={{ flex: 1, margin: 0 }}>Tags Mealie → Tags canoniques</h2>
+        <h2 style={{ flex: 1, margin: 0 }}>Import Mealie : tags → catégories</h2>
         <button className="btn btn-secondary" onClick={syncTags} disabled={syncing}>
           <RefreshCw size={13} /> {syncing ? "…" : "Sync"}
         </button>
@@ -3686,7 +3690,7 @@ function TagMappingsSection() {
       {pending.length > 0 && (
         <div style={{ marginBottom: 12 }}>
           <div style={{ fontSize: 12, color: "var(--amber)", fontWeight: 600, marginBottom: 6 }}>
-            {pending.length} tag(s) en attente de confirmation
+            {pending.length} tag(s) Mealie en attente de confirmation
           </div>
           {pending.map((m) => (
             <div key={m.mealie_tag_name} className="tag-mapping-row">
@@ -3740,7 +3744,7 @@ function CanonicalTagsSection() {
   useEffect(() => {
     loadCanonicalTags()
       .then(setTags)
-      .catch(() => notify("Impossible de charger les tags."));
+      .catch(() => notify("Impossible de charger les catégories."));
   }, []);
 
   async function addTag() {
@@ -3826,7 +3830,7 @@ function CanonicalTagsSection() {
           </div>
         ))}
         {tags.length === 0 && (
-          <div className="empty-state"><p>Aucun tag canonique</p></div>
+          <div className="empty-state"><p>Aucune catégorie</p></div>
         )}
       </div>
       <div className="sides-add">
@@ -4137,7 +4141,7 @@ function IngredientAssociationsSection() {
     <div className="settings-section ingredient-associations">
       <div className="settings-section-header">
         <div>
-          <h2>Associations ingrédients</h2>
+          <h2>Associations d'ingrédients</h2>
           <p>Relie les ingrédients Mealie et les items d'inventaire autour des ingrédients Menu Hebdo.</p>
         </div>
         <div className="association-sync-actions">
@@ -4430,7 +4434,7 @@ function ChildColorsSection() {
               type="color"
               value={c.color || DEFAULT_TAG_COLOR}
               onChange={(e) => recolor(c.id, e.target.value)}
-              title="Couleur du tag de présence dans Semaine et Repas"
+              title="Couleur de présence dans Semaine et Repas"
               className="tag-color-input"
             />
             <span style={{ flex: 1, fontSize: 14 }}>{c.name} ({c.short_label})</span>
@@ -4499,7 +4503,7 @@ function FamilyMembersSection() {
               type="color"
               value={m.color || DEFAULT_TAG_COLOR}
               onChange={(e) => recolor(m.id, e.target.value)}
-              title="Couleur du tag dans Repas"
+              title="Couleur de préférence dans Repas"
               className="tag-color-input"
             />
             <input
@@ -4577,7 +4581,7 @@ function MealContextsSection() {
 
   return (
     <div className="settings-section">
-      <h2>Sorties, réceptions et restaurants</h2>
+      <h2>Lieux et restaurants</h2>
       <div className="context-add-row">
         <select value={newKind} onChange={(e) => setNewKind(e.target.value as MealContext["kind"])}>
           <option value="people">Personne/foyer</option>
