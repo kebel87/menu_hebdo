@@ -12,6 +12,7 @@ from typing import Any, Iterator
 DATA_DIR = Path(os.getenv("MENU_DATA_DIR", Path(__file__).resolve().parents[2] / "data"))
 DB_PATH = DATA_DIR / "menu.db"
 SCHEMA_VERSION = "menu_hebdo_v1"
+DEFAULT_RECIPE_CATEGORY_TAGS = ("Boeuf", "Poulet", "Porc", "Poisson", "Végé")
 
 
 def now_iso() -> str:
@@ -52,6 +53,7 @@ def initialize_database() -> None:
             )
             _seed(db)
         _apply_migrations(db)
+        _seed_default_recipe_category_tags(db)
 
 
 def get_meta_value(key: str) -> str | None:
@@ -354,6 +356,22 @@ def _seed(db: sqlite3.Connection) -> None:
     for tag_name in ("weekend", "lunchs"):
         db.execute(
             "INSERT OR IGNORE INTO canonical_tags (id, name, created_at) VALUES (?, ?, ?)",
+            (new_id(), tag_name, now),
+        )
+
+
+def _seed_default_recipe_category_tags(db: sqlite3.Connection) -> None:
+    now = now_iso()
+    for tag_name in DEFAULT_RECIPE_CATEGORY_TAGS:
+        exists = db.execute(
+            "SELECT 1 FROM canonical_tags WHERE lower(name)=lower(?)",
+            (tag_name,),
+        ).fetchone()
+        if exists:
+            continue
+        db.execute(
+            """INSERT INTO canonical_tags (id, name, description, color, is_filter, created_at)
+               VALUES (?, ?, '', '', 0, ?)""",
             (new_id(), tag_name, now),
         )
 
@@ -887,6 +905,7 @@ def create_local_recipe(
     with connect() as db:
         recipe_id = new_id()
         now = now_iso()
+        normalized_tag_ids = _local_recipe_tag_ids(db, tag_ids, is_weekend, makes_lunch)
         db.execute(
             """INSERT INTO local_recipes
                (id, name, ingredients_json, tags_json, liked_by_json, is_weekend, makes_lunch,
@@ -894,7 +913,7 @@ def create_local_recipe(
                VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (recipe_id, name.strip(),
              json.dumps(ingredients or []),
-             json.dumps(tag_ids or []),
+             json.dumps(normalized_tag_ids),
              json.dumps(liked_by or []),
              int(is_weekend), int(makes_lunch),
              prep_minutes, notes, now, now),
@@ -906,6 +925,17 @@ def create_local_recipe(
 def update_local_recipe(recipe_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     with connect() as db:
         now = now_iso()
+        existing = db.execute("SELECT * FROM local_recipes WHERE id=?", (recipe_id,)).fetchone()
+        if not existing:
+            raise ValueError("Recette introuvable")
+        normalized_tag_ids: list[str] | None = None
+        if "tag_ids" in payload or "is_weekend" in payload or "makes_lunch" in payload:
+            current_tag_ids = json.loads(existing["tags_json"] or "[]")
+            supplied_tag_ids = payload.get("tag_ids")
+            next_tag_ids = supplied_tag_ids if isinstance(supplied_tag_ids, list) else current_tag_ids
+            next_is_weekend = bool(payload.get("is_weekend", existing["is_weekend"]))
+            next_makes_lunch = bool(payload.get("makes_lunch", existing["makes_lunch"]))
+            normalized_tag_ids = _local_recipe_tag_ids(db, next_tag_ids, next_is_weekend, next_makes_lunch)
         allowed = {"name", "ingredients_json", "tags_json", "liked_by_json", "is_weekend",
                    "makes_lunch", "prep_minutes", "notes"}
         updates: list[tuple[str, Any]] = []
@@ -913,18 +943,18 @@ def update_local_recipe(recipe_id: str, payload: dict[str, Any]) -> dict[str, An
             if key == "ingredients" and isinstance(val, list):
                 updates.append(("ingredients_json", json.dumps(val)))
             elif key == "tag_ids" and isinstance(val, list):
-                updates.append(("tags_json", json.dumps(val)))
+                continue
             elif key == "liked_by" and isinstance(val, list):
                 updates.append(("liked_by_json", json.dumps(val)))
             elif key in allowed:
                 updates.append((key, val))
+        if normalized_tag_ids is not None:
+            updates.append(("tags_json", json.dumps(normalized_tag_ids)))
         if updates:
             set_clause = ", ".join(f"{k}=?" for k, _ in updates)
             values = [v for _, v in updates] + [now, recipe_id]
             db.execute(f"UPDATE local_recipes SET {set_clause}, updated_at=? WHERE id=?", values)
         row = db.execute("SELECT * FROM local_recipes WHERE id=?", (recipe_id,)).fetchone()
-        if not row:
-            raise ValueError("Recette introuvable")
         return _parse_local_recipe(dict(row), _canonical_tags_map(db))
 
 
@@ -947,6 +977,32 @@ def _parse_local_recipe(r: dict, tags_map: dict[str, dict[str, Any]]) -> dict:
     r["is_weekend"] = bool(r.get("is_weekend"))
     r["makes_lunch"] = bool(r.get("makes_lunch"))
     return r
+
+
+def _local_recipe_tag_ids(
+    db: sqlite3.Connection,
+    tag_ids: list[str] | None,
+    is_weekend: bool,
+    makes_lunch: bool,
+) -> list[str]:
+    tech_tags = {
+        r["name"].lower(): r["id"]
+        for r in db.execute("SELECT id, name FROM canonical_tags WHERE name IN ('weekend', 'lunchs')").fetchall()
+    }
+    tech_ids = set(tech_tags.values())
+    result: list[str] = []
+    seen: set[str] = set()
+    for tag_id in tag_ids or []:
+        if tag_id in tech_ids or tag_id in seen:
+            continue
+        result.append(tag_id)
+        seen.add(tag_id)
+    if is_weekend and tech_tags.get("weekend") and tech_tags["weekend"] not in seen:
+        result.append(tech_tags["weekend"])
+        seen.add(tech_tags["weekend"])
+    if makes_lunch and tech_tags.get("lunchs") and tech_tags["lunchs"] not in seen:
+        result.append(tech_tags["lunchs"])
+    return result
 
 
 # ---------------------------------------------------------------------------

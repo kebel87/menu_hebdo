@@ -2116,7 +2116,6 @@ function RecipesScreen({ canEdit }: { canEdit: boolean }) {
           {sorted.map((r) => {
             const key = r.source === "mealie" ? `mealie-${r.slug}` : `local-${r.id}`;
             const meta = [
-              r.makes_lunch ? "Lunch" : null,
               r.prep_minutes ? `${r.prep_minutes} min` : null,
               r.last_used ? weeksAgo(r.last_used) : "Jamais mangé",
             ].filter(Boolean);
@@ -2130,7 +2129,10 @@ function RecipesScreen({ canEdit }: { canEdit: boolean }) {
                     </span>
                   )}
                 </div>
-                <div className="recipe-card-meta">{meta.join(" · ")}</div>
+                <div className="recipe-card-meta">
+                  {r.makes_lunch && <span className="recipe-card-lunch">Lunch</span>}
+                  {meta.length > 0 && <span>{meta.join(" · ")}</span>}
+                </div>
               </div>
             );
           })}
@@ -2565,7 +2567,7 @@ function RecipeDetailModal({
     if (recipe.source !== "local") return;
     api<CanonicalTag[]>("/api/tags")
       .then((t) => setAllTags([...t].filter((tag) => !tag.is_filter).sort((a, b) => a.name.localeCompare(b.name))))
-      .catch(() => notify("Impossible de charger les tags."));
+      .catch(() => notify("Impossible de charger les catégories."));
     loadCanonicalIngredients()
       .then((t) => setAllIngredients([...t].sort((a, b) => a.name.localeCompare(b.name))))
       .catch(() => notify("Impossible de charger les ingrédients canoniques."));
@@ -2785,7 +2787,7 @@ function RecipeDetailModal({
         )}
 
         <section className="recipe-detail-section">
-          <div className="section-label">Tags</div>
+          <div className="section-label">Catégories</div>
           {recipe.source === "local" && canEdit ? (
             allTags.length > 0 ? (
               <div className="detail-chip-row">
@@ -2805,7 +2807,7 @@ function RecipeDetailModal({
                 ))}
               </div>
             ) : (
-              <div className="recipe-last">Aucun tag configuré.</div>
+              <div className="recipe-last">Aucune catégorie configurée.</div>
             )
           ) : recipe.tags.length > 0 ? (
             <div className="detail-chip-row">
@@ -2820,7 +2822,7 @@ function RecipeDetailModal({
               ))}
             </div>
           ) : (
-            <div className="recipe-last">Aucun tag.</div>
+            <div className="recipe-last">Aucune catégorie.</div>
           )}
         </section>
 
@@ -2887,8 +2889,8 @@ function LocalRecipeModal({
 
   useEffect(() => {
     api<CanonicalTag[]>("/api/tags")
-      .then((t) => setAllTags([...t].sort((a, b) => a.name.localeCompare(b.name))))
-      .catch(() => notify("Impossible de charger les tags."));
+      .then((t) => setAllTags([...t].filter((tag) => !tag.is_filter).sort((a, b) => a.name.localeCompare(b.name))))
+      .catch(() => notify("Impossible de charger les catégories."));
     loadCanonicalIngredients()
       .then((t) => setAllIngredients([...t].sort((a, b) => a.name.localeCompare(b.name))))
       .catch(() => notify("Impossible de charger les ingrédients canoniques."));
@@ -2902,6 +2904,10 @@ function LocalRecipeModal({
 
   function toggleLikedBy(childId: string) {
     setLikedBy((prev) => prev.includes(childId) ? prev.filter((c) => c !== childId) : [...prev, childId]);
+  }
+
+  function toggleTag(tagId: string) {
+    setTagIds((prev) => prev.includes(tagId) ? prev.filter((id) => id !== tagId) : [...prev, tagId]);
   }
 
   function updateIngredient(index: number, patch: Partial<Ingredient>) {
@@ -2986,17 +2992,27 @@ function LocalRecipeModal({
           </label>
         </div>
         <div className="form-row">
-          <label>Tags</label>
-          <select
-            multiple
-            value={tagIds}
-            onChange={(e) => setTagIds(Array.from(e.target.selectedOptions, (o) => o.value))}
-            size={Math.min(6, Math.max(3, allTags.length || 1))}
-          >
-            {allTags.map((t) => (
-              <option key={t.id} value={t.id}>{t.name}</option>
-            ))}
-          </select>
+          <label>Catégories</label>
+          {allTags.length > 0 ? (
+            <div className="detail-chip-row">
+              {allTags.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  className={`tag-choice${tagIds.includes(t.id) ? " active" : ""}`}
+                  style={tagIds.includes(t.id) ? {
+                    background: t.color || DEFAULT_TAG_COLOR,
+                    color: readableTextColor(t.color || DEFAULT_TAG_COLOR),
+                  } : undefined}
+                  onClick={() => toggleTag(t.id)}
+                >
+                  {t.name}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="recipe-last">Aucune catégorie configurée.</div>
+          )}
         </div>
         {allChildren.length > 0 && (
           <div className="form-row">
@@ -3681,7 +3697,7 @@ function CanonicalTagsSection() {
 
   return (
     <div className="settings-section">
-      <h2>Tags canoniques</h2>
+      <h2>Catégories de recettes</h2>
       <div className="canonical-tags-list" style={{ marginBottom: 8 }}>
         {tags.map((t) => (
           <div key={t.id} className="canonical-tag-row">
@@ -3719,7 +3735,7 @@ function CanonicalTagsSection() {
         <input
           value={newName}
           onChange={(e) => setNewName(e.target.value)}
-          placeholder="Nouveau tag…"
+          placeholder="Nouvelle catégorie…"
           onKeyDown={(e) => e.key === "Enter" && addTag()}
         />
         <button onClick={addTag}><Plus size={14} /></button>
