@@ -32,6 +32,7 @@ import {
   Eye,
   EyeOff,
   Pencil,
+  Star,
 } from "lucide-react";
 import "./styles.css";
 
@@ -800,7 +801,7 @@ function scoreLabel(score: number | null | undefined): string {
 
 function slotKindLabel(kind?: SlotKind): string {
   if (kind === "away") return "Ailleurs";
-  if (kind === "hosting") return "On reçoit";
+  if (kind === "hosting") return "Reçoit";
   if (kind === "restaurant") return "Resto";
   return "Maison";
 }
@@ -1246,6 +1247,8 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
               if (slot) setWizard({ date: iso, mode: "edit" });
               else setWizard({ date: iso, mode: "new" });
             };
+            const visibleTags = slot?.tags?.slice(0, 1) ?? [];
+            const hiddenBadgeCount = slot ? Math.max(0, (slot.tags?.length ?? 0) - visibleTags.length) : 0;
 
             return (
               <DroppableCard key={iso} slotDate={iso} isOver={isOver}>
@@ -1281,14 +1284,15 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
                     </div>
                     <div className="day-badges">
                       {slot && slot.slot_kind !== "recipe" && (
-                        <span className={`badge badge-context badge-${slot.slot_kind}`}>
+                        <span className={`badge badge-context badge-${slot.slot_kind}`} title={slotKindLabel(slot.slot_kind)}>
                           {slotKindLabel(slot.slot_kind)}
                         </span>
                       )}
-                      {slot?.tags?.slice(0, 2).map((t) => (
+                      {visibleTags.map((t) => (
                         <span
                           key={t.id}
                           className="badge tag-badge"
+                          title={t.name}
                           style={{
                             background: t.color || DEFAULT_TAG_COLOR,
                             color: readableTextColor(t.color || DEFAULT_TAG_COLOR),
@@ -1297,9 +1301,14 @@ function WeekScreen({ canEdit }: { canEdit: boolean }) {
                           {t.name}
                         </span>
                       ))}
-                      {slot?.slot_kind !== "away" && slot?.slot_kind !== "restaurant" && slot?.makes_lunch && <span className="badge badge-lunch">Lunch</span>}
+                      {slot?.slot_kind !== "away" && slot?.slot_kind !== "restaurant" && slot?.makes_lunch && <span className="badge badge-lunch week-lunch-badge" title="Fait des lunchs">Lunch</span>}
+                      {hiddenBadgeCount > 0 && (
+                        <span className="badge badge-more" title={`${hiddenBadgeCount} catégorie(s) masquée(s)`}>
+                          +{hiddenBadgeCount}
+                        </span>
+                      )}
                       {slot && slot.inventory_score?.score !== undefined && (
-                        <span className={`badge ${scoreClass(slot.inventory_score?.score)}`}>
+                        <span className={`badge ${scoreClass(slot.inventory_score?.score)}`} title="Disponibilité inventaire">
                           {scoreLabel(slot.inventory_score?.score)}
                         </span>
                       )}
@@ -2398,6 +2407,13 @@ function SidesScreen() {
               <div className="side-library-main">
                 <div className="side-library-title-row">
                   <span className="side-library-name">{s.name}</span>
+                  {s.is_favorite && (
+                    <Star
+                      size={13}
+                      className="side-favorite-star"
+                      aria-label="Accompagnement fréquent"
+                    />
+                  )}
                   <SideStatusBadges side={s} />
                 </div>
                 <div className="side-library-meta">
@@ -2434,17 +2450,16 @@ function SidesScreen() {
 }
 
 function SideStatusBadges({ side }: { side: SideStat }) {
+  if (side.is_active) return null;
   return (
     <span className="side-library-badges">
-      {!side.is_active && <span className="badge badge-ago">Désactivé</span>}
-      {side.is_favorite && <span className="badge badge-lunch">Fréquent</span>}
-      {side.total_count === 0 && <span className="badge badge-score-warn">Jamais utilisé</span>}
+      <span className="badge badge-ago">Désactivé</span>
     </span>
   );
 }
 
 function SideUsageMeta({ side }: { side: SideStat }) {
-  if (side.total_count === 0) return null;
+  if (side.total_count === 0) return <span>Jamais utilisé</span>;
   return (
     <>
       <span>{side.total_count} utilisation{side.total_count > 1 ? "s" : ""}</span>
