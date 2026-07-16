@@ -251,6 +251,17 @@ interface SideFreqEntry {
   last_date: string;
 }
 
+interface SideHistoryEntry {
+  id: string;
+  slot_date: string;
+  slot_kind: "recipe" | "hosting";
+  recipe_name: string;
+  context_id?: string | null;
+  context_name?: string | null;
+  side_name: string;
+  side_id?: string | null;
+}
+
 interface MealSideAssociation {
   recipe_name: string;
   side_name: string;
@@ -3209,6 +3220,9 @@ function StatsScreen() {
   const [historyRecipe, setHistoryRecipe] = useState<FreqEntry | null>(null);
   const [recipeHistory, setRecipeHistory] = useState<RecipeHistoryEntry[]>([]);
   const [recipeHistoryLoading, setRecipeHistoryLoading] = useState(false);
+  const [historySide, setHistorySide] = useState<SideFreqEntry | null>(null);
+  const [sideHistory, setSideHistory] = useState<SideHistoryEntry[]>([]);
+  const [sideHistoryLoading, setSideHistoryLoading] = useState(false);
 
   useEffect(() => {
     loadStats(freqWeeks)
@@ -3245,6 +3259,23 @@ function StatsScreen() {
       notify("Impossible de charger l'historique du repas.");
     } finally {
       setRecipeHistoryLoading(false);
+    }
+  }
+
+  async function openSideHistory(side: SideFreqEntry) {
+    setHistorySide(side);
+    setSideHistory([]);
+    setSideHistoryLoading(true);
+    const sideIdParam = side.side_id ? `&side_id=${encodeURIComponent(side.side_id)}` : "";
+    try {
+      const rows = await api<SideHistoryEntry[]>(
+        `/api/stats/side-history?side_name=${encodeURIComponent(side.name)}${sideIdParam}&weeks=${freqWeeks}`,
+      );
+      setSideHistory(rows);
+    } catch {
+      notify("Impossible de charger l'historique de l'accompagnement.");
+    } finally {
+      setSideHistoryLoading(false);
     }
   }
 
@@ -3405,7 +3436,20 @@ function StatsScreen() {
               </thead>
               <tbody>
                 {sideFreq.map((f) => (
-                  <tr key={f.side_id ?? f.name}>
+                  <tr
+                    key={f.side_id ?? f.name}
+                    className="freq-row-clickable"
+                    onClick={() => openSideHistory(f)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        openSideHistory(f);
+                      }
+                    }}
+                    title="Voir l'historique de consommation"
+                  >
                     <td>{f.name}</td>
                     <td style={{ width: 120 }}>
                       <FrequencyBar count={f.count} maxCount={maxSideCount} />
@@ -3561,6 +3605,15 @@ function StatsScreen() {
           onClose={() => setHistoryRecipe(null)}
         />
       )}
+      {historySide && (
+        <SideHistoryModal
+          side={historySide}
+          weeks={freqWeeks}
+          history={sideHistory}
+          loading={sideHistoryLoading}
+          onClose={() => setHistorySide(null)}
+        />
+      )}
     </div>
   );
 }
@@ -3623,6 +3676,70 @@ function RecipeHistoryModal({
                   <div className="stats-history-detail">
                     {context && <span>{context}</span>}
                     <span>{sides || "Aucun accompagnement"}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SideHistoryModal({
+  side,
+  weeks,
+  history,
+  loading,
+  onClose,
+}: {
+  side: SideFreqEntry;
+  weeks: number;
+  history: SideHistoryEntry[];
+  loading: boolean;
+  onClose: () => void;
+}) {
+  function contextLabel(entry: SideHistoryEntry): string | null {
+    if (entry.slot_kind === "hosting") return `Reçoit ${entry.context_name ?? "famille"}`;
+    return null;
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal stats-history-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="stats-history-header">
+          <div>
+            <span className="section-label">Historique de l'accompagnement</span>
+            <h2>{side.name}</h2>
+          </div>
+          <button className="btn-icon" onClick={onClose} title="Fermer">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="stats-history-summary">
+          <span><strong>{side.count}</strong> fois sur {statsPeriodLabel(weeks)}</span>
+          <span>Dernière fois : {weeksAgo(side.last_date)}</span>
+        </div>
+
+        {loading ? (
+          <div className="empty-state"><p>Chargement…</p></div>
+        ) : history.length === 0 ? (
+          <div className="empty-state"><p>Aucun historique détaillé dans cette période</p></div>
+        ) : (
+          <div className="stats-history-list">
+            {history.map((entry) => {
+              const context = contextLabel(entry);
+              return (
+                <div key={entry.id} className="stats-history-row">
+                  <div className="stats-history-date">
+                    <strong>{fmtDateFull(entry.slot_date)}</strong>
+                    <span>{weeksAgo(entry.slot_date)}</span>
+                  </div>
+                  <div className="stats-history-detail">
+                    {context && <span>{context}</span>}
+                    <span>{entry.recipe_name}</span>
                   </div>
                 </div>
               );

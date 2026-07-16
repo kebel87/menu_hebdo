@@ -995,6 +995,11 @@ body {
 .freq-table tr:last-child td { border-bottom: none; }
 .freq-row-clickable { cursor: pointer; }
 .freq-row-clickable:hover td { background: var(--bg); }
+.freq-row-clickable:focus-visible { outline: none; }
+.freq-row-clickable:focus-visible td {
+  background: var(--green-soft);
+  box-shadow: inset 0 1px 0 var(--green), inset 0 -1px 0 var(--green);
+}
 .freq-bar { height: 6px; background: var(--green); border-radius: 3px; min-width: 4px; }
 .stats-history-modal {
   padding-bottom: 24px;

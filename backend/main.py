@@ -63,6 +63,7 @@ from menu_app.store import (
     recipe_usage_stats,
     set_child_color,
     set_meta_value,
+    side_history,
     side_frequency,
     update_canonical_ingredient,
     update_family_member,
@@ -1393,6 +1394,17 @@ def api_sides_frequency(
     actor: Actor = Depends(require_permission("menu.read")),
 ) -> list[dict]:
     return side_frequency(weeks)
+
+
+@app.get("/api/stats/side-history")
+def api_side_history(
+    side_name: str,
+    side_id: str | None = None,
+    weeks: int = 12,
+    limit: int = 50,
+    actor: Actor = Depends(require_permission("menu.read")),
+) -> list[dict]:
+    return side_history(side_name, side_id, weeks, limit)
 
 
 @app.get("/api/stats/meal-side-associations")

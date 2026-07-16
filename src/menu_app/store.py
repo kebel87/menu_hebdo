@@ -1531,6 +1531,30 @@ def side_frequency(weeks: int = 12) -> list[dict[str, Any]]:
         return [dict(r) for r in rows]
 
 
+def side_history(side_name: str, side_id: str | None = None, weeks: int = 12, limit: int = 50) -> list[dict[str, Any]]:
+    """Historique détaillé d'un accompagnement, avec repas et contexte."""
+    where_clause = "ss.side_id = ?" if side_id else "COALESCE(sd.name, ss.free_text) = ?"
+    side_key = side_id if side_id else side_name.strip()
+    with connect() as db:
+        rows = db.execute(
+            f"""SELECT ms.id, ms.slot_date, ms.slot_kind, ms.recipe_name,
+                       ms.context_id, mc.name as context_name,
+                       COALESCE(sd.name, ss.free_text) as side_name,
+                       ss.side_id as side_id
+                FROM meal_slot_sides ss
+                JOIN meal_slots ms ON ms.id = ss.slot_id
+                LEFT JOIN meal_contexts mc ON mc.id = ms.context_id
+                LEFT JOIN sides sd ON sd.id = ss.side_id
+                WHERE ms.slot_date >= date('now', ? || ' days')
+                  AND ms.slot_kind IN ('recipe', 'hosting')
+                  AND {where_clause}
+                ORDER BY ms.slot_date DESC
+                LIMIT ?""",
+            (f"-{weeks * 7}", side_key, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def meal_side_associations(weeks: int = 12) -> list[dict[str, Any]]:
     """Associations fréquentes entre repas et accompagnements sur N semaines passées."""
     with connect() as db:
