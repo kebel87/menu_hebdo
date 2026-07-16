@@ -1690,10 +1690,14 @@ function MealWizard({
   const [contexts, setContexts] = useState<MealContext[]>([]);
   const [q, setQ] = useState("");
   const [filters, setFilters] = useState<Set<string>>(new Set());
+  const [categoryFilter, setCategoryFilter] = useState("");
+  const [likedByFilter, setLikedByFilter] = useState("");
+  const [filterMenu, setFilterMenu] = useState<"category" | "likedBy" | null>(null);
   const [loading, setLoading] = useState(true);
   const [mealListOpen, setMealListOpen] = useState(false);
   const [showAllMeals, setShowAllMeals] = useState(false);
   const filterTags = useRecipeCategoryTags({ filterableOnly: true });
+  const children = usePeople();
 
   useEffect(() => {
     if (mode === "sides") return;
@@ -1721,14 +1725,15 @@ function MealWizard({
     if (q && !searchKey(r.name).includes(searchKey(q))) return false;
     if (filters.has("rapide") && (!r.prep_minutes || r.prep_minutes > 30)) return false;
     if (filters.has("dispo") && (r.inventory_score?.score ?? 0) < 0.8) return false;
-    for (const t of filterTags) {
-      if (filters.has(t.id) && !hasTag(r, t.id)) return false;
-    }
+    if (categoryFilter && !hasTag(r, categoryFilter)) return false;
+    if (likedByFilter && !r.liked_by.includes(likedByFilter)) return false;
     return true;
   });
 
-  const isIdle = !q && filters.size === 0;
+  const isIdle = !q && filters.size === 0 && !categoryFilter && !likedByFilter;
   const mealResults = showAllMeals ? recipes : filtered;
+  const selectedCategory = filterTags.find((t) => t.id === categoryFilter);
+  const selectedLikedBy = children.find((c) => c.id === likedByFilter);
 
   function pickMeal(r: Recipe) {
     setMealListOpen(false);
@@ -1880,20 +1885,18 @@ function MealWizard({
           <>
             {mode !== "meal" && (
               <div className="meal-kind-row">
-                <span className="meal-kind-prompt">
-                  {slotKind === "recipe" ? "Pas à la maison ?" : "Type"}
-                </span>
                 {(slotKind === "recipe"
                   ? [
-                      ["away", "Chez quelqu'un"],
-                      ["hosting", "On reçoit"],
-                      ["restaurant", "Restaurant"],
+                      ["recipe", "Maison"],
+                      ["away", "Ailleurs"],
+                      ["hosting", "Reçoit"],
+                      ["restaurant", "Resto"],
                     ]
                   : [
                       ["recipe", "Maison"],
-                      ["away", "Chez quelqu'un"],
-                      ["hosting", "On reçoit"],
-                      ["restaurant", "Restaurant"],
+                      ["away", "Ailleurs"],
+                      ["hosting", "Reçoit"],
+                      ["restaurant", "Resto"],
                     ]
                 ).map(([kind, label]) => (
                   <button
@@ -1925,19 +1928,19 @@ function MealWizard({
 
             {slotKind === "restaurant" && (
               <div className="form-row">
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={restaurantMealEnabled}
-                    onChange={(e) => {
-                      setRestaurantMealEnabled(e.target.checked);
-                      setMealChanged(true);
-                      if (!e.target.checked) setChosenRecipe(null);
-                    }}
-                    style={{ marginRight: 6 }}
-                  />
-                  Associer un repas
-                </label>
+                <button
+                  type="button"
+                  className={`restaurant-meal-toggle${restaurantMealEnabled ? " active" : ""}`}
+                  onClick={() => {
+                    const next = !restaurantMealEnabled;
+                    setRestaurantMealEnabled(next);
+                    setMealChanged(true);
+                    if (!next) setChosenRecipe(null);
+                  }}
+                >
+                  <span>Repas associé</span>
+                  <strong>{restaurantMealEnabled ? "Oui" : "Non"}</strong>
+                </button>
               </div>
             )}
 
@@ -1988,26 +1991,102 @@ function MealWizard({
                     </button>
                   </div>
                 </div>
-                <div className="filter-chips">
+                <div className="filter-toolbar meal-filter-toolbar">
                   {["dispo", "rapide"].map((f) => (
-                <button
-                  key={f}
-                  className={`filter-chip${filters.has(f) ? " active" : ""}`}
-                  onClick={() => toggleFilter(f)}
-                >
-                  {f === "dispo" ? "Disponible" : "< 30 min"}
-                </button>
-                  ))}
-                  {filterTags.map((t) => (
-                <button
-                  key={t.id}
-                  className={`filter-chip${filters.has(t.id) ? " active" : ""}`}
-                  onClick={() => toggleFilter(t.id)}
-                >
-                  {t.name}
+                    <button
+                      key={f}
+                      className={`filter-chip${filters.has(f) ? " active" : ""}`}
+                      onClick={() => toggleFilter(f)}
+                    >
+                      {f === "dispo" ? "Disponible" : "< 30 min"}
                     </button>
                   ))}
+                  <button
+                    type="button"
+                    className={`filter-chip filter-select-trigger${categoryFilter ? " active" : ""}`}
+                    onClick={() => setFilterMenu("category")}
+                  >
+                    {selectedCategory ? `${selectedCategory.name} ×` : "Catégorie"}
+                    {!selectedCategory && <ChevronDown size={13} />}
+                  </button>
+                  <button
+                    type="button"
+                    className={`filter-chip filter-select-trigger${likedByFilter ? " active" : ""}`}
+                    onClick={() => setFilterMenu("likedBy")}
+                  >
+                    {selectedLikedBy ? `${selectedLikedBy.name} ×` : "Aimé par"}
+                    {!selectedLikedBy && <ChevronDown size={13} />}
+                  </button>
                 </div>
+                {filterMenu && (
+                  <div className="filter-sheet-backdrop" onClick={() => setFilterMenu(null)}>
+                    <div className="filter-sheet" onClick={(e) => e.stopPropagation()}>
+                      <div className="filter-sheet-header">
+                        <strong>{filterMenu === "category" ? "Catégorie" : "Aimé par"}</strong>
+                        <button className="btn-icon" type="button" onClick={() => setFilterMenu(null)}>
+                          <X size={16} />
+                        </button>
+                      </div>
+                      {filterMenu === "category" ? (
+                        <div className="filter-options">
+                          <button
+                            type="button"
+                            className={`filter-option${!categoryFilter ? " selected" : ""}`}
+                            onClick={() => {
+                              setCategoryFilter("");
+                              setFilterMenu(null);
+                            }}
+                          >
+                            Toutes les catégories
+                          </button>
+                          {filterTags.map((t) => (
+                            <button
+                              key={t.id}
+                              type="button"
+                              className={`filter-option${categoryFilter === t.id ? " selected" : ""}`}
+                              onClick={() => {
+                                setCategoryFilter(t.id);
+                                setMealListOpen(true);
+                                setShowAllMeals(false);
+                                setFilterMenu(null);
+                              }}
+                            >
+                              {t.name}
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="filter-options">
+                          <button
+                            type="button"
+                            className={`filter-option${!likedByFilter ? " selected" : ""}`}
+                            onClick={() => {
+                              setLikedByFilter("");
+                              setFilterMenu(null);
+                            }}
+                          >
+                            Tout le monde
+                          </button>
+                          {children.map((c) => (
+                            <button
+                              key={c.id}
+                              type="button"
+                              className={`filter-option${likedByFilter === c.id ? " selected" : ""}`}
+                              onClick={() => {
+                                setLikedByFilter(c.id);
+                                setMealListOpen(true);
+                                setShowAllMeals(false);
+                                setFilterMenu(null);
+                              }}
+                            >
+                              {c.name}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
                 {mealListOpen && (
                   loading ? (
                     <div className="meal-dropdown-panel">
@@ -2024,7 +2103,7 @@ function MealWizard({
                           <button key={key} type="button" className="meal-option" onMouseDown={() => pickMeal(r)}>
                             <span className="meal-option-name">{r.name}</span>
                             <span className="recipe-card-meta">
-                              {r.makes_lunch && <span className="badge badge-lunch">Lunch</span>}
+                              {r.makes_lunch && <span className="badge badge-lunch meal-picker-lunch-badge">Lunch</span>}
                               {r.is_weekend && <span className="badge badge-weekend">Weekend</span>}
                               {r.prep_minutes && <span className="recipe-last">{r.prep_minutes} min</span>}
                               {r.inventory_score?.score !== null && r.inventory_score?.score !== undefined && (
@@ -2042,14 +2121,14 @@ function MealWizard({
                 {isIdle && favorites.length > 0 && !mealListOpen && (
                   <div className="favorites-row">
                     <div className="favorites-label">Favoris</div>
-                    <div className="meal-favorites-grid">
+                    <div className="meal-favorites-list">
                       {favorites.map((r) => {
                         const key = r.source === "mealie" ? `mealie-${r.slug}` : `local-${r.id}`;
                         return (
-                          <button key={key} type="button" className="meal-favorite-card" onClick={() => pickMeal(r)}>
+                          <button key={key} type="button" className="meal-option meal-favorite-card" onClick={() => pickMeal(r)}>
                             <span className="meal-option-name">{r.name}</span>
                             <span className="recipe-card-meta">
-                              {r.makes_lunch && <span className="badge badge-lunch">Lunch</span>}
+                              {r.makes_lunch && <span className="badge badge-lunch meal-picker-lunch-badge">Lunch</span>}
                               {r.is_weekend && <span className="badge badge-weekend">Weekend</span>}
                               {r.prep_minutes && <span className="recipe-last">{r.prep_minutes} min</span>}
                             </span>
@@ -2093,23 +2172,24 @@ function MealWizard({
 
         {step === "confirm" && (
           <>
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ fontWeight: 700, fontSize: 15 }}>{confirmRecipeName}</div>
+            <div className="meal-confirm-card">
+              <div className="section-label">Résumé</div>
+              <div className="meal-confirm-title">{confirmRecipeName}</div>
               {slotKind === "hosting" && selectedContext && (
-                <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
+                <div className="meal-confirm-subtitle">
                   Reçoit {selectedContext.name}
                 </div>
               )}
               {slotKind === "restaurant" && restaurantMealEnabled && selectedContext && (
-                <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
+                <div className="meal-confirm-subtitle">
                   Resto · {selectedContext.name}
                 </div>
               )}
-              <div className="sides-list" style={{ marginTop: 6 }}>
+              <div className="sides-list meal-confirm-chips">
                 {slotKind === "away" || slotKind === "restaurant" ? (
                   <span className="side-chip">{slotKindLabel(slotKind)}</span>
                 ) : chosenSides.length === 0 ? (
-                  <span style={{ fontSize: 12, color: "var(--muted)" }}>Aucun accompagnement</span>
+                  <span className="meal-confirm-empty">Aucun accompagnement</span>
                 ) : (
                   chosenSides.map((s) => (
                     <span key={s.id} className="side-chip">{s.name}</span>
