@@ -190,14 +190,44 @@ body {
   width: 100%;
 }
 
-.month-lunch-dot {
+.month-lunch-badge {
   position: absolute;
   top: 4px;
   right: 4px;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #92400e;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+@media (min-width: 600px) {
+  .calendar-modal {
+    max-width: min(820px, 92vw);
+    padding: 22px;
+  }
+  .calendar-modal .month-panel { padding: 8px 0 0; }
+  .calendar-modal .day-cell {
+    aspect-ratio: 1.25 / 1;
+    min-height: 72px;
+    padding: 7px;
+  }
+  .calendar-modal .day-number { font-size: 14px; }
+  .calendar-modal .event-label {
+    font-size: 12px;
+    line-height: 1.25;
+  }
+  .calendar-modal .month-lunch-badge {
+    top: 6px;
+    right: 6px;
+  }
 }
 
 /* ── Week grid (7 cards, iPhone: tout dans l'écran) ── */
@@ -1043,27 +1073,47 @@ body {
 }
 .meal-kind-btn.active { border-color: var(--green); color: var(--green); background: var(--green-soft); }
 .context-add-row {
-  display: grid;
-  grid-template-columns: minmax(100px, 140px) minmax(0, 1fr) auto;
-  gap: 6px;
-  margin-bottom: 10px;
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
 }
 .context-add-row input,
 .context-add-row select {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  padding: 7px 8px;
+  height: 38px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 0 10px;
   font-size: 14px;
-  background: var(--panel);
+  background: transparent;
+}
+.context-add-row input {
+  flex: 1;
+  min-width: 0;
+}
+.context-add-row select {
+  width: 132px;
+}
+.context-add-row input:focus,
+.context-add-row select:focus {
+  border-color: var(--green);
+  border-style: solid;
+  outline: none;
 }
 .context-add-row button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   background: var(--green);
   color: #fff;
   border: none;
-  border-radius: var(--radius-sm);
-  padding: 0 10px;
+  border-radius: 8px;
+  height: 38px;
+  padding: 0 14px;
+  font-size: 14px;
   cursor: pointer;
+  white-space: nowrap;
 }
+.context-add-row button:disabled { opacity: .45; cursor: not-allowed; }
 .context-list { display: flex; flex-direction: column; gap: 6px; }
 .context-row {
   display: flex;

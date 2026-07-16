@@ -627,27 +627,31 @@ function readableTextColor(hex: string): string {
   return luminance > 0.6 ? "#242826" : "#ffffff";
 }
 
-function useFilterableTags(): CanonicalTag[] {
-  const [tags, setTags] = useState<CanonicalTag[]>([]);
-  useEffect(() => {
-    api<CanonicalTag[]>("/api/tags")
-      .then((t) => setTags(t.filter((x) => x.is_filter && !isSystemRecipeTag(x)).sort((a, b) => a.name.localeCompare(b.name))))
-      .catch(() => notify("Impossible de charger les catégories de filtre."));
-  }, []);
-  return tags;
-}
-
 function isSystemRecipeTag(tag: CanonicalTag): boolean {
   return ["weekend", "lunchs"].includes(tag.name.trim().toLowerCase());
 }
 
-function useRecipeCategoryTags(): CanonicalTag[] {
+type RecipeCategoryTagsOptions = {
+  enabled?: boolean;
+  filterableOnly?: boolean;
+};
+
+function useRecipeCategoryTags(options: RecipeCategoryTagsOptions = {}): CanonicalTag[] {
+  const enabled = options.enabled ?? true;
+  const filterableOnly = options.filterableOnly ?? false;
   const [tags, setTags] = useState<CanonicalTag[]>([]);
   useEffect(() => {
-    api<CanonicalTag[]>("/api/tags")
-      .then((t) => setTags(t.filter((x) => !isSystemRecipeTag(x)).sort((a, b) => a.name.localeCompare(b.name))))
-      .catch(() => notify("Impossible de charger les catégories."));
-  }, []);
+    if (!enabled) {
+      setTags([]);
+      return;
+    }
+    loadCanonicalTags()
+      .then((t) => setTags(t
+        .filter((x) => !isSystemRecipeTag(x))
+        .filter((x) => !filterableOnly || x.is_filter)
+        .sort((a, b) => a.name.localeCompare(b.name))))
+      .catch(() => notify(filterableOnly ? "Impossible de charger les catégories de filtre." : "Impossible de charger les catégories."));
+  }, [enabled, filterableOnly]);
   return tags;
 }
 
@@ -1401,7 +1405,7 @@ function MonthGrid({
             >
               <span className="day-number">{day}</span>
               {slot && <span className="event-label">{slotTitle(slot)}</span>}
-              {slot?.slot_kind !== "away" && slot?.slot_kind !== "restaurant" && slot?.makes_lunch && <span className="month-lunch-dot" aria-hidden="true" title="Fait des lunchs" />}
+              {slot?.slot_kind !== "away" && slot?.slot_kind !== "restaurant" && slot?.makes_lunch && <span className="month-lunch-badge" title="Fait des lunchs">L</span>}
             </button>
           );
         })}
@@ -1436,7 +1440,7 @@ function DatePickerModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal calendar-modal" onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", alignItems: "center", marginBottom: 12 }}>
           <button className="btn-icon" onClick={() => setCursor((c) => shiftMonth(c, -1))}>
             <ChevronLeft size={16} />
@@ -1612,7 +1616,7 @@ function MealWizard({
   const [loading, setLoading] = useState(true);
   const [mealListOpen, setMealListOpen] = useState(false);
   const [showAllMeals, setShowAllMeals] = useState(false);
-  const filterTags = useFilterableTags();
+  const filterTags = useRecipeCategoryTags({ filterableOnly: true });
 
   useEffect(() => {
     if (mode === "sides") return;
@@ -2033,7 +2037,7 @@ function RecipesScreen({ canEdit }: { canEdit: boolean }) {
   const [loading, setLoading] = useState(true);
   const [detail, setDetail] = useState<Recipe | null>(null);
   const [showAddLocal, setShowAddLocal] = useState(false);
-  const categoryTags = useRecipeCategoryTags();
+  const categoryTags = useRecipeCategoryTags({ filterableOnly: true });
   const children = usePeople();
   const selectedCategory = categoryTags.find((t) => t.id === categoryFilter);
   const selectedLikedBy = children.find((c) => c.id === likedByFilter);
@@ -2649,7 +2653,7 @@ function RecipeDetailModal({
   const [isHidden, setIsHidden] = useState(recipe.is_hidden);
   const [notes, setNotes] = useState(recipe.notes ?? "");
   const [tagIds, setTagIds] = useState<string[]>(recipe.tag_ids ?? []);
-  const [allTags, setAllTags] = useState<CanonicalTag[]>([]);
+  const allTags = useRecipeCategoryTags({ enabled: recipe.source === "local" && canEdit });
   const [likedBy, setLikedBy] = useState<string[]>(recipe.liked_by ?? []);
   const [ingredients, setIngredients] = useState<Ingredient[]>(recipe.ingredients ?? []);
   const [allIngredients, setAllIngredients] = useState<CanonicalIngredient[]>([]);
@@ -2660,9 +2664,6 @@ function RecipeDetailModal({
 
   useEffect(() => {
     if (recipe.source !== "local") return;
-    api<CanonicalTag[]>("/api/tags")
-      .then((t) => setAllTags([...t].filter((tag) => !isSystemRecipeTag(tag)).sort((a, b) => a.name.localeCompare(b.name))))
-      .catch(() => notify("Impossible de charger les catégories."));
     loadCanonicalIngredients()
       .then((t) => setAllIngredients([...t].sort((a, b) => a.name.localeCompare(b.name))))
       .catch(() => notify("Impossible de charger les ingrédients canoniques."));
@@ -2973,7 +2974,7 @@ function LocalRecipeModal({
   const [prep, setPrep] = useState(recipe?.prep_minutes?.toString() ?? "");
   const [notes, setNotes] = useState(recipe?.notes ?? "");
   const [tagIds, setTagIds] = useState<string[]>(recipe?.tag_ids ?? []);
-  const [allTags, setAllTags] = useState<CanonicalTag[]>([]);
+  const allTags = useRecipeCategoryTags();
   const [likedBy, setLikedBy] = useState<string[]>(recipe?.liked_by ?? []);
   const [ingredients, setIngredients] = useState<Ingredient[]>(recipe?.ingredients ?? []);
   const [allIngredients, setAllIngredients] = useState<CanonicalIngredient[]>([]);
@@ -2983,9 +2984,6 @@ function LocalRecipeModal({
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    api<CanonicalTag[]>("/api/tags")
-      .then((t) => setAllTags([...t].filter((tag) => !isSystemRecipeTag(tag)).sort((a, b) => a.name.localeCompare(b.name))))
-      .catch(() => notify("Impossible de charger les catégories."));
     loadCanonicalIngredients()
       .then((t) => setAllIngredients([...t].sort((a, b) => a.name.localeCompare(b.name))))
       .catch(() => notify("Impossible de charger les ingrédients canoniques."));
@@ -3647,6 +3645,7 @@ function TagMappingsSection() {
   const [mappings, setMappings] = useState<TagMapping[]>([]);
   const [tags, setTags] = useState<CanonicalTag[]>([]);
   const [syncing, setSyncing] = useState(false);
+  const [ignoredOpen, setIgnoredOpen] = useState(false);
 
   useEffect(() => {
     loadTagMappings().then(setMappings).catch(() => notify("Impossible de charger les associations de tags Mealie."));
@@ -3677,7 +3676,8 @@ function TagMappingsSection() {
   }
 
   const pending = mappings.filter((m) => m.status === "pending");
-  const rest = mappings.filter((m) => m.status !== "pending");
+  const confirmed = mappings.filter((m) => m.status === "confirmed");
+  const ignored = mappings.filter((m) => m.status === "ignored");
 
   return (
     <div className="settings-section">
@@ -3717,9 +3717,9 @@ function TagMappingsSection() {
           ))}
         </div>
       )}
-      {rest.length > 0 && (
+      {confirmed.length > 0 && (
         <div>
-          {rest.map((m) => (
+          {confirmed.map((m) => (
             <div key={m.mealie_tag_name} className="tag-mapping-row">
               <span className={`status-dot ${m.status}`} />
               <span className="mealie-tag">{m.mealie_tag_name}</span>
@@ -3729,6 +3729,24 @@ function TagMappingsSection() {
             </div>
           ))}
         </div>
+      )}
+      {ignored.length > 0 && (
+        <AssociationGroup
+          title="Ignorés"
+          count={ignored.length}
+          collapsed={!ignoredOpen}
+          onToggle={() => setIgnoredOpen((open) => !open)}
+        >
+          {ignored.map((m) => (
+            <div key={m.mealie_tag_name} className="tag-mapping-row">
+              <span className={`status-dot ${m.status}`} />
+              <span className="mealie-tag">{m.mealie_tag_name}</span>
+              <span style={{ fontSize: 12, color: "var(--muted)" }}>
+                {m.canonical_tag_name ?? "—"}
+              </span>
+            </div>
+          ))}
+        </AssociationGroup>
       )}
       {mappings.length === 0 && (
         <div className="empty-state"><p>Aucun tag Mealie importé</p></div>
@@ -4538,7 +4556,7 @@ function FamilyMembersSection() {
 function MealContextsSection() {
   const [contexts, setContexts] = useState<MealContext[]>([]);
   const [newName, setNewName] = useState("");
-  const [newKind, setNewKind] = useState<MealContext["kind"]>("people");
+  const [newKind, setNewKind] = useState<MealContext["kind"]>("restaurant");
 
   function load() {
     loadMealContexts()
@@ -4575,26 +4593,13 @@ function MealContextsSection() {
   }
 
   const groups: [MealContext["kind"], string][] = [
-    ["people", "Personnes ou foyers"],
     ["restaurant", "Restaurants"],
+    ["people", "Personnes ou foyers"],
   ];
 
   return (
     <div className="settings-section">
       <h2>Lieux et restaurants</h2>
-      <div className="context-add-row">
-        <select value={newKind} onChange={(e) => setNewKind(e.target.value as MealContext["kind"])}>
-          <option value="people">Personne/foyer</option>
-          <option value="restaurant">Restaurant</option>
-        </select>
-        <input
-          value={newName}
-          onChange={(e) => setNewName(e.target.value)}
-          placeholder="Nom…"
-          onKeyDown={(e) => e.key === "Enter" && addContext()}
-        />
-        <button onClick={addContext}><Plus size={14} /></button>
-      </div>
       {groups.map(([kind, title]) => {
         const rows = contexts.filter((c) => c.kind === kind);
         return (
@@ -4629,6 +4634,26 @@ function MealContextsSection() {
           </div>
         );
       })}
+      <form
+        className="context-add-row"
+        onSubmit={(e) => {
+          e.preventDefault();
+          addContext();
+        }}
+      >
+        <select value={newKind} onChange={(e) => setNewKind(e.target.value as MealContext["kind"])}>
+          <option value="restaurant">Restaurant</option>
+          <option value="people">Personne/foyer</option>
+        </select>
+        <input
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+          placeholder={newKind === "restaurant" ? "Nouveau restaurant…" : "Nouvelle personne ou foyer…"}
+        />
+        <button type="submit" disabled={!newName.trim()}>
+          <Plus size={14} /> Ajouter
+        </button>
+      </form>
     </div>
   );
 }
