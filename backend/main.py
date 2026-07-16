@@ -58,6 +58,7 @@ from menu_app.store import (
     meal_side_associations,
     meal_context_stats,
     move_slot,
+    recipe_history,
     recipe_frequency,
     recipe_usage_stats,
     set_child_color,
@@ -1374,6 +1375,16 @@ def api_frequency(
     actor: Actor = Depends(require_permission("menu.read")),
 ) -> list[dict]:
     return recipe_frequency(weeks)
+
+
+@app.get("/api/stats/recipe-history")
+def api_recipe_history(
+    recipe_name: str,
+    weeks: int = 12,
+    limit: int = 50,
+    actor: Actor = Depends(require_permission("menu.read")),
+) -> list[dict]:
+    return recipe_history(recipe_name, weeks, limit)
 
 
 @app.get("/api/stats/sides-frequency")

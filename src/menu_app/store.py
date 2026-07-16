@@ -1433,6 +1433,29 @@ def search_history(q: str, limit: int = 50) -> list[dict[str, Any]]:
         return [dict(r) for r in rows]
 
 
+def recipe_history(recipe_name: str, weeks: int = 12, limit: int = 50) -> list[dict[str, Any]]:
+    """Historique détaillé d'un repas, avec contexte et accompagnements."""
+    with connect() as db:
+        rows = db.execute(
+            """SELECT ms.id, ms.slot_date, ms.slot_kind, ms.recipe_name,
+                      ms.context_id, mc.name as context_name
+               FROM meal_slots ms
+               LEFT JOIN meal_contexts mc ON mc.id = ms.context_id
+               WHERE ms.recipe_name = ?
+                 AND ms.slot_date >= date('now', ? || ' days')
+                 AND ms.slot_kind IN ('recipe', 'hosting')
+               ORDER BY ms.slot_date DESC
+               LIMIT ?""",
+            (recipe_name.strip(), f"-{weeks * 7}", limit),
+        ).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["sides"] = _get_sides_for_slot(db, item["id"])
+            result.append(item)
+        return result
+
+
 def recipe_usage_stats() -> dict[str, dict[str, Any]]:
     """Nombre total de fois et dernière consommation par recette (nom), toutes périodes
     confondues (contrairement à recipe_frequency, qui se limite à une fenêtre récente)."""

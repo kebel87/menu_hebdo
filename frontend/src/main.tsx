@@ -228,6 +228,16 @@ interface HistoryResult {
   week_start: string;
 }
 
+interface RecipeHistoryEntry {
+  id: string;
+  slot_date: string;
+  slot_kind: "recipe" | "hosting";
+  recipe_name: string;
+  context_id?: string | null;
+  context_name?: string | null;
+  sides: SlotSide[];
+}
+
 interface FreqEntry {
   recipe_name: string;
   count: number;
@@ -1383,6 +1393,14 @@ function MonthGrid({
   const firstWeekday = (new Date(year, month - 1, 1).getDay() + 6) % 7;
   const daysInMonth = new Date(year, month, 0).getDate();
   const todayIso = toIso(new Date());
+  function monthMarker(slot?: MealSlot): { label: string; title: string; tone: string } | null {
+    if (!slot) return null;
+    if (slot.slot_kind === "restaurant") return { label: "R", title: "Restaurant", tone: "restaurant" };
+    if (slot.slot_kind === "away") return { label: "F", title: slotKindLabel(slot.slot_kind), tone: "away" };
+    if (slot.slot_kind === "hosting") return { label: "F", title: slotKindLabel(slot.slot_kind), tone: "hosting" };
+    if (slot.makes_lunch) return { label: "L", title: "Fait des lunchs", tone: "lunch" };
+    return null;
+  }
 
   return (
     <div className="month-panel">
@@ -1396,6 +1414,7 @@ function MonthGrid({
         {Array.from({ length: daysInMonth }, (_, i) => i + 1).map((day) => {
           const iso = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
           const slot = slotsByDate.get(iso);
+          const marker = monthMarker(slot);
           return (
             <button
               key={iso}
@@ -1405,7 +1424,7 @@ function MonthGrid({
             >
               <span className="day-number">{day}</span>
               {slot && <span className="event-label">{slotTitle(slot)}</span>}
-              {slot?.slot_kind !== "away" && slot?.slot_kind !== "restaurant" && slot?.makes_lunch && <span className="month-lunch-badge" title="Fait des lunchs">L</span>}
+              {marker && <span className={`month-marker-badge ${marker.tone}`} title={marker.title}>{marker.label}</span>}
             </button>
           );
         })}
@@ -3186,7 +3205,10 @@ function StatsScreen() {
   const [associationRecipe, setAssociationRecipe] = useState("");
   const [associationSide, setAssociationSide] = useState("");
   const [contextStats, setContextStats] = useState<ContextStats | null>(null);
-  const [freqWeeks, setFreqWeeks] = useState(12);
+  const [freqWeeks, setFreqWeeks] = useState(STATS_PERIODS[1].weeks);
+  const [historyRecipe, setHistoryRecipe] = useState<FreqEntry | null>(null);
+  const [recipeHistory, setRecipeHistory] = useState<RecipeHistoryEntry[]>([]);
+  const [recipeHistoryLoading, setRecipeHistoryLoading] = useState(false);
 
   useEffect(() => {
     loadStats(freqWeeks)
@@ -3207,6 +3229,22 @@ function StatsScreen() {
       setResults(r);
     } finally {
       setSearching(false);
+    }
+  }
+
+  async function openRecipeHistory(recipe: FreqEntry) {
+    setHistoryRecipe(recipe);
+    setRecipeHistory([]);
+    setRecipeHistoryLoading(true);
+    try {
+      const rows = await api<RecipeHistoryEntry[]>(
+        `/api/stats/recipe-history?recipe_name=${encodeURIComponent(recipe.recipe_name)}&weeks=${freqWeeks}`,
+      );
+      setRecipeHistory(rows);
+    } catch {
+      notify("Impossible de charger l'historique du repas.");
+    } finally {
+      setRecipeHistoryLoading(false);
     }
   }
 
@@ -3321,7 +3359,20 @@ function StatsScreen() {
                 </thead>
                 <tbody>
                   {freq.map((f) => (
-                    <tr key={f.recipe_name}>
+                    <tr
+                      key={f.recipe_name}
+                      className="freq-row-clickable"
+                      onClick={() => openRecipeHistory(f)}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          openRecipeHistory(f);
+                        }
+                      }}
+                      title="Voir l'historique de consommation"
+                    >
                       <td>{f.recipe_name}</td>
                       <td style={{ width: 120 }}>
                         <FrequencyBar count={f.count} maxCount={maxCount} />
@@ -3501,6 +3552,84 @@ function StatsScreen() {
           )}
         </div>
       )}
+      {historyRecipe && (
+        <RecipeHistoryModal
+          recipe={historyRecipe}
+          weeks={freqWeeks}
+          history={recipeHistory}
+          loading={recipeHistoryLoading}
+          onClose={() => setHistoryRecipe(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function statsPeriodLabel(weeks: number): string {
+  return STATS_PERIODS.find((period) => period.weeks === weeks)?.label ?? `${weeks} sem.`;
+}
+
+function RecipeHistoryModal({
+  recipe,
+  weeks,
+  history,
+  loading,
+  onClose,
+}: {
+  recipe: FreqEntry;
+  weeks: number;
+  history: RecipeHistoryEntry[];
+  loading: boolean;
+  onClose: () => void;
+}) {
+  function contextLabel(entry: RecipeHistoryEntry): string | null {
+    if (entry.slot_kind === "hosting") return `Reçoit ${entry.context_name ?? "famille"}`;
+    return null;
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal stats-history-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="stats-history-header">
+          <div>
+            <span className="section-label">Historique du repas</span>
+            <h2>{recipe.recipe_name}</h2>
+          </div>
+          <button className="btn-icon" onClick={onClose} title="Fermer">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="stats-history-summary">
+          <span><strong>{recipe.count}</strong> fois sur {statsPeriodLabel(weeks)}</span>
+          <span>Dernière fois : {weeksAgo(recipe.last_date)}</span>
+        </div>
+
+        {loading ? (
+          <div className="empty-state"><p>Chargement…</p></div>
+        ) : history.length === 0 ? (
+          <div className="empty-state"><p>Aucun historique détaillé dans cette période</p></div>
+        ) : (
+          <div className="stats-history-list">
+            {history.map((entry) => {
+              const context = contextLabel(entry);
+              const sides = entry.sides.map((side) => side.name).filter(Boolean).join(", ");
+              return (
+                <div key={entry.id} className="stats-history-row">
+                  <div className="stats-history-date">
+                    <strong>{fmtDateFull(entry.slot_date)}</strong>
+                    <span>{weeksAgo(entry.slot_date)}</span>
+                  </div>
+                  <div className="stats-history-detail">
+                    {context && <span>{context}</span>}
+                    <span>{sides || "Aucun accompagnement"}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
