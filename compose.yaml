@@ -42,6 +42,8 @@ services:
       AUTH_MODE: "${AUTH_MODE:-proxy}"
       MEALIE_URL: "https://mealie.kb87.net"
       MEALIE_API_KEY: "${MEALIE_API_KEY}"
+      MEALIE_CACHE_TTL_SECONDS: "${MEALIE_CACHE_TTL_SECONDS:-604800}"
+      MEALIE_NIGHTLY_REFRESH_HOUR: "${MEALIE_NIGHTLY_REFRESH_HOUR:-3}"
       INVENTAIRE_API_URL: "http://inventaire-familial:8000"
       SERVICE_API_KEY: "${SERVICE_API_KEY}"
       CALENDAR_API_URL: "${CALENDAR_API_URL:-https://calendrier.kb87.net}"

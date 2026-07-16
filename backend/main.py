@@ -117,6 +117,7 @@ def startup() -> None:
     _sync_mealie_tags()
     _start_reconciliation_worker()
     _refresh_external_caches()
+    threading.Thread(target=_warm_mealie_cache, daemon=True).start()
     _start_external_sync_worker()
 
 
@@ -131,7 +132,9 @@ def _sync_mealie_tags() -> None:
 
 
 _EXTERNAL_SYNC_INTERVAL = 1800  # 30 min
+_MEALIE_NIGHTLY_REFRESH_HOUR = int(os.getenv("MEALIE_NIGHTLY_REFRESH_HOUR", "3"))
 _external_sync_thread: threading.Thread | None = None
+_last_mealie_nightly_refresh: str | None = None
 _recipe_list_cache_ttl = 300  # 5 min
 _recipe_list_cache: dict[bool, tuple[float, list[dict[str, Any]]]] = {}
 _recipe_list_cache_lock = threading.Lock()
@@ -142,15 +145,26 @@ def _invalidate_recipe_list_cache() -> None:
         _recipe_list_cache.clear()
 
 
-def _refresh_external_caches() -> dict[str, int]:
-    """Rafraîchit proactivement les caches Mealie (recettes) et calendrier
-    (présence) en arrière-plan, pour que les requêtes utilisateur (/api/week)
-    ne fassent jamais d'appel HTTP externe dans leur chemin critique."""
-    result = {"recipes": 0, "presence_days": 0}
+def _refresh_mealie_cache(force: bool, include_details: bool = True) -> int:
     if mealie_ok():
+        recipes = get_recipes(force=force)
+        if include_details:
+            _mealie_details_by_slug([r["slug"] for r in recipes if r.get("slug")], force=force)
+        _invalidate_recipe_list_cache()
+        return len(recipes)
+    return 0
+
+
+def _refresh_external_caches(refresh_mealie: bool = False) -> dict[str, int]:
+    """Rafraîchit les caches externes sans mettre Mealie dans le chemin chaud.
+
+    La présence calendrier reste fréquente. Mealie est rafraîchi seulement sur
+    demande ou par le cycle nocturne, car les recettes changent très rarement.
+    """
+    result = {"recipes": 0, "presence_days": 0}
+    if refresh_mealie:
         try:
-            result["recipes"] = len(get_recipes(force=True))
-            _invalidate_recipe_list_cache()
+            result["recipes"] = _refresh_mealie_cache(force=True)
         except Exception:
             logger.warning("Échec de rafraîchissement du cache Mealie", exc_info=True)
     try:
@@ -160,11 +174,34 @@ def _refresh_external_caches() -> dict[str, int]:
     return result
 
 
+def _warm_mealie_cache() -> None:
+    try:
+        count = _refresh_mealie_cache(force=False)
+        if count:
+            logger.info("Cache Mealie réchauffé: %s recette(s)", count)
+    except Exception:
+        logger.warning("Échec du réchauffement du cache Mealie", exc_info=True)
+
+
+def _refresh_mealie_cache_if_nightly_window() -> None:
+    global _last_mealie_nightly_refresh
+    now = date.today()
+    today_iso = now.isoformat()
+    if _last_mealie_nightly_refresh == today_iso:
+        return
+    if time.localtime().tm_hour < _MEALIE_NIGHTLY_REFRESH_HOUR:
+        return
+    count = _refresh_mealie_cache(force=True)
+    _last_mealie_nightly_refresh = today_iso
+    logger.info("Refresh nocturne Mealie terminé: %s recette(s)", count)
+
+
 def _external_sync_loop() -> None:
     while True:
         time.sleep(_EXTERNAL_SYNC_INTERVAL)
         try:
             _refresh_external_caches()
+            _refresh_mealie_cache_if_nightly_window()
         except Exception:
             logger.warning("Échec du cycle de synchronisation externe", exc_info=True)
 
@@ -708,6 +745,48 @@ def _mealie_ingredient_entries(
     return entries
 
 
+def _mealie_details_by_slug(slugs: list[str], force: bool = False) -> dict[str, dict[str, Any] | None]:
+    """Charge les détails Mealie requis pour les scores inventaire.
+
+    L'endpoint liste de Mealie ne contient pas les ingrédients. Les charger en
+    série rend l'onglet Recettes lent dès que le cache détail expire.
+    """
+    if not slugs:
+        return {}
+
+    def load(slug: str) -> tuple[str, dict[str, Any] | None]:
+        try:
+            return slug, get_recipe(slug, force=force)
+        except Exception:
+            logger.debug("Mealie: échec de récupération du détail %s", slug, exc_info=True)
+            return slug, None
+
+    details: dict[str, dict[str, Any] | None] = {}
+    with ThreadPoolExecutor(max_workers=min(8, len(slugs))) as pool:
+        for slug, detail in pool.map(load, slugs):
+            details[slug] = detail
+    failed = sum(1 for detail in details.values() if detail is None)
+    if failed:
+        logger.warning("Mealie: %s détail(s) de recette indisponible(s) pour le score inventaire", failed)
+    return details
+
+
+def _log_slow_recipe_build(include_hidden: bool, elapsed: float, recipes: list[dict[str, Any]]) -> None:
+    if elapsed < 1:
+        return
+    sources: dict[str, int] = {}
+    for recipe in recipes:
+        source = str(recipe.get("source") or "unknown")
+        sources[source] = sources.get(source, 0) + 1
+    logger.info(
+        "Construction liste recettes lente: %.2fs, include_hidden=%s, total=%s, sources=%s",
+        elapsed,
+        include_hidden,
+        len(recipes),
+        sources,
+    )
+
+
 _RECONCILIATION_META_KEY = "last_inventory_reconciliation_date"
 _reconciliation_thread: threading.Thread | None = None
 
@@ -836,15 +915,22 @@ def _build_recipe_list(include_hidden: bool) -> list[dict[str, Any]]:
                 for m in list_mealie_ingredient_mappings(status="confirmed")
                 if m.get("canonical_ingredient_id")
             }
+            mealie_rows: list[tuple[dict[str, Any], str, dict[str, Any], list[dict[str, Any]]]] = []
             for r in mealie_recipes:
                 slug = r.get("slug", "")
+                if not slug:
+                    continue
                 meta = get_recipe_meta(slug)
                 if meta.get("is_hidden") and not include_hidden:
                     continue
                 tags = (
                     _canonical_tags_for_mealie_recipe(r, *tag_ctx) if tag_ctx else []
                 )
-                entries = _mealie_ingredient_entries(get_recipe(slug), ingredient_mapping)
+                mealie_rows.append((r, slug, meta, tags))
+
+            details_by_slug = _mealie_details_by_slug([slug for _, slug, _, _ in mealie_rows])
+            for r, slug, meta, tags in mealie_rows:
+                entries = _mealie_ingredient_entries(details_by_slug.get(slug), ingredient_mapping)
                 score_data = score_ingredients(entries, availability)
                 name = r.get("name", slug)
                 stats = usage.get(name, {})
@@ -876,7 +962,9 @@ def _cached_recipe_list(include_hidden: bool) -> list[dict[str, Any]]:
         cached = _recipe_list_cache.get(include_hidden)
         if cached and (now - cached[0]) < _recipe_list_cache_ttl:
             return cached[1]
+    started_at = time.perf_counter()
     recipes = _build_recipe_list(include_hidden)
+    _log_slow_recipe_build(include_hidden, time.perf_counter() - started_at, recipes)
     with _recipe_list_cache_lock:
         _recipe_list_cache[include_hidden] = (time.time(), recipes)
     return recipes
@@ -1083,7 +1171,7 @@ def api_sync_refresh(
 ) -> dict:
     """Force immédiatement le rafraîchissement des caches Mealie (recettes) et
     calendrier (présence), sans attendre le prochain cycle du worker périodique."""
-    return _refresh_external_caches()
+    return _refresh_external_caches(refresh_mealie=True)
 
 
 @app.post("/api/tag-mappings/sync")

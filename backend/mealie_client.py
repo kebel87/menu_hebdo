@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 from typing import Any
 
@@ -11,12 +12,13 @@ logger = logging.getLogger(__name__)
 
 _MEALIE_URL = os.getenv("MEALIE_URL", "https://mealie.kb87.net")
 _MEALIE_API_KEY = os.getenv("MEALIE_API_KEY", "")
-_CACHE_TTL = 3600  # 1 heure
+_CACHE_TTL = int(os.getenv("MEALIE_CACHE_TTL_SECONDS", str(7 * 24 * 3600)))
 
 _recipe_list_cache: dict[str, Any] = {}
 _recipe_list_cache_at: float = 0.0
 _recipe_detail_cache: dict[str, Any] = {}
 _recipe_detail_cache_at: float = 0.0
+_recipe_detail_cache_lock = threading.Lock()
 _tag_cache: list[str] = []
 _tag_cache_at: float = 0.0
 
@@ -45,18 +47,20 @@ def get_recipes(force: bool = False) -> list[dict[str, Any]]:
     return list(_recipe_list_cache.values())
 
 
-def get_recipe(slug: str) -> dict[str, Any] | None:
+def get_recipe(slug: str, force: bool = False) -> dict[str, Any] | None:
     """Vue DÉTAIL (inclut recipeIngredient) — cache séparé de get_recipes() car
     l'endpoint liste de Mealie ne renvoie pas les ingrédients."""
     global _recipe_detail_cache, _recipe_detail_cache_at
-    if (time.time() - _recipe_detail_cache_at) >= _CACHE_TTL:
-        _recipe_detail_cache = {}
-        _recipe_detail_cache_at = time.time()
-    if slug in _recipe_detail_cache:
-        return _recipe_detail_cache[slug]
+    with _recipe_detail_cache_lock:
+        if (time.time() - _recipe_detail_cache_at) >= _CACHE_TTL:
+            _recipe_detail_cache = {}
+            _recipe_detail_cache_at = time.time()
+        if not force and slug in _recipe_detail_cache:
+            return _recipe_detail_cache[slug]
     try:
         recipe = _get(f"/recipes/{slug}")
-        _recipe_detail_cache[slug] = recipe
+        with _recipe_detail_cache_lock:
+            _recipe_detail_cache[slug] = recipe
         return recipe
     except httpx.HTTPStatusError:
         return None

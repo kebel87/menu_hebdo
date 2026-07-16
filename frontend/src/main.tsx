@@ -2115,25 +2115,22 @@ function RecipesScreen({ canEdit }: { canEdit: boolean }) {
           )}
           {sorted.map((r) => {
             const key = r.source === "mealie" ? `mealie-${r.slug}` : `local-${r.id}`;
+            const meta = [
+              r.makes_lunch ? "Lunch" : null,
+              r.prep_minutes ? `${r.prep_minutes} min` : null,
+              r.last_used ? weeksAgo(r.last_used) : "Jamais mangé",
+            ].filter(Boolean);
             return (
               <div key={key} className="recipe-card" onClick={() => setDetail(r)}>
                 <div className="recipe-card-header">
                   <span className="recipe-card-name">{r.name}</span>
-                </div>
-                <div className="recipe-card-meta">
-                  {r.makes_lunch && <span className="badge badge-lunch">Lunch</span>}
-                  {r.prep_minutes && (
-                    <span className="recipe-last">{r.prep_minutes} min</span>
-                  )}
                   {r.inventory_score?.score !== null && r.inventory_score?.score !== undefined && (
-                    <span className={`badge ${scoreClass(r.inventory_score.score)}`}>
+                    <span className={`badge recipe-card-score ${scoreClass(r.inventory_score.score)}`}>
                       {Math.round(r.inventory_score.score * 100)}% dispo
                     </span>
                   )}
-                  <span className="recipe-last">
-                    {r.last_used ? `${weeksAgo(r.last_used)}` : "Jamais mangé"}
-                  </span>
                 </div>
+                <div className="recipe-card-meta">{meta.join(" · ")}</div>
               </div>
             );
           })}
