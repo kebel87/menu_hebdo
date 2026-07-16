@@ -438,6 +438,20 @@ function byName<T extends { name: string }>(items: T[]): T[] {
   return [...items].sort((a, b) => a.name.localeCompare(b.name));
 }
 
+function isOtherLabel(name: string): boolean {
+  return ["autre", "autres"].includes(searchKey(name.trim()));
+}
+
+function byContextName(items: MealContext[]): MealContext[] {
+  return [...items].sort((a, b) => {
+    const aOther = isOtherLabel(a.name);
+    const bOther = isOtherLabel(b.name);
+    if (a.kind !== b.kind) return a.kind.localeCompare(b.kind);
+    if (aOther !== bOther) return aOther ? 1 : -1;
+    return a.name.localeCompare(b.name);
+  });
+}
+
 function formatNumber(value: number | undefined): string {
   if (value === undefined || Number.isNaN(value)) return "0";
   return Number.isInteger(value) ? String(value) : value.toLocaleString("fr-CA", { maximumFractionDigits: 2 });
@@ -538,7 +552,7 @@ function loadMealContexts(): Promise<MealContext[]> {
   if (!mealContextsPromise) {
     mealContextsPromise = api<MealContext[]>("/api/meal-contexts?include_inactive=true")
       .then((contexts) => {
-        mealContextsCache = byName(contexts);
+        mealContextsCache = byContextName(contexts);
         return mealContextsCache;
       })
       .finally(() => { mealContextsPromise = null; });
@@ -547,7 +561,7 @@ function loadMealContexts(): Promise<MealContext[]> {
 }
 
 function replaceMealContextsCache(updater: (contexts: MealContext[]) => MealContext[]) {
-  mealContextsCache = byName(updater(mealContextsCache ?? []));
+  mealContextsCache = byContextName(updater(mealContextsCache ?? []));
 }
 
 function loadNotificationConfig(): Promise<NotificationConfig> {
@@ -1707,7 +1721,7 @@ function MealWizard({
       .finally(() => setLoading(false));
     api<Recipe[]>(`/api/recipes/favorites?date=${encodeURIComponent(date)}`).then(setFavorites).catch(() => notify("Impossible de charger les recettes favorites."));
     api<MealContext[]>("/api/meal-contexts")
-      .then(setContexts)
+      .then((loadedContexts) => setContexts(byContextName(loadedContexts)))
       .catch(() => notify("Impossible de charger les lieux et restaurants."));
   }, [mode, date]);
 
@@ -5084,7 +5098,7 @@ function MealContextsSection() {
       method: "POST",
       body: JSON.stringify({ kind: newKind, name: newName.trim() }),
     });
-    setContexts((prev) => byName([...prev, c]));
+    setContexts((prev) => byContextName([...prev, c]));
     replaceMealContextsCache((prev) => [...prev, c]);
     setNewName("");
   }
@@ -5094,13 +5108,13 @@ function MealContextsSection() {
       method: "PATCH",
       body: JSON.stringify(payload),
     });
-    setContexts((prev) => byName(prev.map((x) => (x.id === id ? c : x))));
+    setContexts((prev) => byContextName(prev.map((x) => (x.id === id ? c : x))));
     replaceMealContextsCache((prev) => prev.map((x) => (x.id === id ? c : x)));
   }
 
   async function deleteContext(id: string) {
     await api(`/api/meal-contexts/${id}`, { method: "DELETE" });
-    setContexts((prev) => prev.map((c) => (c.id === id ? { ...c, is_active: false } : c)));
+    setContexts((prev) => byContextName(prev.map((c) => (c.id === id ? { ...c, is_active: false } : c))));
     replaceMealContextsCache((prev) => prev.map((c) => (c.id === id ? { ...c, is_active: false } : c)));
   }
 
