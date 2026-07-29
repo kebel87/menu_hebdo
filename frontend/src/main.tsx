@@ -214,6 +214,7 @@ interface InventoryProduct {
   package_content_unit?: string;
   source_product_ids?: string[];
   format_summary?: string;
+  is_ignored?: boolean;
 }
 
 interface NotificationConfig {
@@ -650,6 +651,10 @@ function refreshInventoryProducts(): Promise<InventoryProduct[]> {
     })
     .finally(() => { inventoryProductsPromise = null; });
   return inventoryProductsPromise;
+}
+
+function replaceInventoryProductsCache(updater: (products: InventoryProduct[]) => InventoryProduct[]) {
+  if (inventoryProductsCache) inventoryProductsCache = byName(updater(inventoryProductsCache));
 }
 
 function prefetchSettings(canAdmin: boolean) {
@@ -4413,6 +4418,7 @@ function IngredientAssociationsSection() {
   const [editingIngredientId, setEditingIngredientId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [ignoredMealieOpen, setIgnoredMealieOpen] = useState(false);
+  const [ignoredInventoryOpen, setIgnoredInventoryOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [syncingMealie, setSyncingMealie] = useState(false);
   const [syncingInventory, setSyncingInventory] = useState(false);
@@ -4526,6 +4532,15 @@ function IngredientAssociationsSection() {
     invalidateRecipeListCache();
   }
 
+  async function setProductIgnored(product: InventoryProduct, ignored: boolean) {
+    await api(`/api/inventory-products/${encodeURIComponent(product.product_id)}/ignored`, {
+      method: "PUT",
+      body: JSON.stringify({ ignored, product_name: product.name }),
+    });
+    setProducts((prev) => prev.map((p) => (p.product_id === product.product_id ? { ...p, is_ignored: ignored } : p)));
+    replaceInventoryProductsCache((prev) => prev.map((p) => (p.product_id === product.product_id ? { ...p, is_ignored: ignored } : p)));
+  }
+
   async function updateMapping(mapping: IngredientMapping, canonicalId: string | undefined, status: IngredientMapping["status"]) {
     const updated = await api<IngredientMapping>(`/api/ingredient-mappings/${encodeURIComponent(mapping.mealie_ingredient_text)}`, {
       method: "PUT",
@@ -4619,12 +4634,17 @@ function IngredientAssociationsSection() {
         .map((link) => [logicalLinkId(link), link])
     ).values(),
   ];
-  const filteredProducts = products.filter((product) => searchKey(product.name).includes(searchKey(inventoryQuery)));
+  const filteredProducts = products
+    .filter((product) => !product.is_ignored)
+    .filter((product) => searchKey(product.name).includes(searchKey(inventoryQuery)));
   const availableProducts = filteredProducts.filter((product) => (
     selectedId
       ? linkForProduct(product)?.canonical_ingredient_id !== selectedId
       : !linkForProduct(product)
   ));
+  const ignoredProducts = products
+    .filter((product) => product.is_ignored)
+    .filter((product) => searchKey(product.name).includes(searchKey(inventoryQuery)));
   const linkedProductCount = new Set(links.map(logicalLinkId)).size;
 
   function renderMappingRow(mapping: IngredientMapping, mode: "selected" | "pending" | "other" | "ignored") {
@@ -4891,9 +4911,36 @@ function IngredientAssociationsSection() {
                         Associer
                       </button>
                     )}
+                    <button
+                      className="btn-icon"
+                      type="button"
+                      onClick={() => setProductIgnored(product, true)}
+                      title="Ignorer durablement"
+                    >
+                      <EyeOff size={13} />
+                    </button>
                   </div>
                 );
               })}
+            </AssociationGroup>
+            <AssociationGroup
+              title="Ignorés"
+              count={ignoredProducts.length}
+              collapsed={!ignoredInventoryOpen}
+              onToggle={() => setIgnoredInventoryOpen((open) => !open)}
+            >
+              {ignoredProducts.map((product) => (
+                <div key={product.product_id} className="association-row association-row-ignored">
+                  <span className="status-dot ignored" />
+                  <div className="association-row-main">
+                    <span className="association-row-title">{product.name}</span>
+                    <span className="association-row-subtitle">ignoré durablement</span>
+                  </div>
+                  <button className="btn btn-secondary btn-xs" type="button" onClick={() => setProductIgnored(product, false)}>
+                    Restaurer
+                  </button>
+                </div>
+              ))}
             </AssociationGroup>
           </section>
         </div>

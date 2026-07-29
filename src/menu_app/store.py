@@ -172,6 +172,12 @@ def _apply_migrations(db: sqlite3.Connection) -> None:
             confirmed_at TEXT NOT NULL DEFAULT '',
             confirmed_by TEXT NOT NULL DEFAULT ''
         );
+
+        CREATE TABLE IF NOT EXISTS ignored_inventory_products (
+            inventory_product_id TEXT PRIMARY KEY,
+            product_name TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        );
     """)
 
 
@@ -1372,6 +1378,25 @@ def upsert_ingredient_mapping(
             (mealie_ingredient_text,),
         ).fetchone()
         return dict(row)
+
+
+def list_ignored_inventory_product_ids() -> set[str]:
+    with connect() as db:
+        rows = db.execute("SELECT inventory_product_id FROM ignored_inventory_products").fetchall()
+        return {r["inventory_product_id"] for r in rows}
+
+
+def set_inventory_product_ignored(product_id: str, product_name: str, ignored: bool) -> None:
+    with connect() as db:
+        if ignored:
+            db.execute(
+                """INSERT INTO ignored_inventory_products (inventory_product_id, product_name, created_at)
+                   VALUES (?,?,?)
+                   ON CONFLICT(inventory_product_id) DO UPDATE SET product_name=excluded.product_name""",
+                (product_id, product_name, now_iso()),
+            )
+        else:
+            db.execute("DELETE FROM ignored_inventory_products WHERE inventory_product_id=?", (product_id,))
 
 
 def import_mealie_ingredients(mealie_ingredient_texts: list[str]) -> None:

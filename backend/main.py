@@ -46,6 +46,7 @@ from menu_app.store import (
     list_canonical_tags,
     list_child_colors,
     list_family_members,
+    list_ignored_inventory_product_ids,
     list_ingredient_inventory_links,
     list_local_recipes,
     list_meal_contexts,
@@ -63,6 +64,7 @@ from menu_app.store import (
     recipe_frequency,
     recipe_usage_stats,
     set_child_color,
+    set_inventory_product_ignored,
     set_meta_value,
     side_history,
     side_frequency,
@@ -1299,13 +1301,20 @@ def api_delete_ingredient_inventory_link(
     return {"ok": True}
 
 
+def _with_ignored_flag(products: list[dict]) -> list[dict]:
+    ignored_ids = list_ignored_inventory_product_ids()
+    for product in products:
+        product["is_ignored"] = product["product_id"] in ignored_ids
+    return products
+
+
 @app.get("/api/inventory-products")
 def api_list_inventory_products(
     actor: Actor = Depends(require_permission("settings.manage")),
 ) -> list[dict]:
     """Catalogue des produits d'inventaire distincts, pour la recherche lors du
     lien avec un ingrédient canonique."""
-    return get_inventory_products()
+    return _with_ignored_flag(get_inventory_products())
 
 
 @app.post("/api/inventory-products/refresh")
@@ -1313,7 +1322,17 @@ def api_refresh_inventory_products(
     actor: Actor = Depends(require_permission("settings.manage")),
 ) -> list[dict]:
     """Force la relecture des produits actifs depuis inventaire_familial."""
-    return get_inventory_products(force=True)
+    return _with_ignored_flag(get_inventory_products(force=True))
+
+
+@app.put("/api/inventory-products/{product_id}/ignored")
+def api_set_inventory_product_ignored(
+    product_id: str,
+    body: dict = Body(...),
+    actor: Actor = Depends(require_permission("settings.manage")),
+) -> dict:
+    set_inventory_product_ignored(product_id, body.get("product_name", ""), bool(body.get("ignored", True)))
+    return {"ok": True}
 
 
 @app.get("/api/ingredient-mappings")
