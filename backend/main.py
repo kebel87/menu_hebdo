@@ -86,7 +86,8 @@ from menu_app.store import (
     initialize_database,
 )
 from .access_control import ACCESS_CONTROL_PATH
-from .auth import Actor, current_actor, require_permission
+from .auth import Actor, current_actor, require_backup_read_access, require_permission
+from .backups import backup_download_path, backup_status, run_backup
 from .mealie_client import get_recipes, get_recipe, get_mealie_tags, is_configured as mealie_ok
 from .inventory_client import get_inventory_products, get_item_history, score_ingredients, is_configured as inv_ok
 from . import calendar_client
@@ -1509,6 +1510,36 @@ def api_flush_notifications(
 # ---------------------------------------------------------------------------
 # Frontend statique
 # ---------------------------------------------------------------------------
+
+@app.get("/api/admin/backups")
+def admin_backups(actor: Actor = Depends(require_backup_read_access("settings.manage"))) -> dict[str, Any]:
+    """Lecture accessible aux admins humains OU à kb87_nexus via
+    FLEET_SERVICE_API_KEY (agrégateur de santé fleet-wide). Rien de sensible
+    exposé (noms de fichiers, tailles, checksums)."""
+    return backup_status()
+
+
+@app.post("/api/admin/backups")
+def create_admin_backup(actor: Actor = Depends(require_permission("settings.manage"))) -> dict[str, Any]:
+    try:
+        return run_backup()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=f"Base de données introuvable: {exc}") from exc
+
+
+@app.get("/api/admin/backups/{filename}")
+def download_admin_backup(
+    filename: str,
+    actor: Actor = Depends(require_permission("settings.manage")),
+) -> FileResponse:
+    try:
+        path = backup_download_path(filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Sauvegarde introuvable") from exc
+    return FileResponse(path, filename=path.name)
+
 
 if os.path.isdir(_FRONTEND_DIST):
     app.mount("/", StaticFiles(directory=_FRONTEND_DIST, html=True), name="frontend")

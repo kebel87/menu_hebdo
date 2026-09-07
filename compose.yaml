@@ -57,6 +57,7 @@ services:
       BACKUP_KEEP_LOCAL: "${BACKUP_KEEP_LOCAL:-14}"
       BACKUP_RCLONE_DEST: "${BACKUP_RCLONE_DEST:-gdrive-crypt:}"
       RCLONE_CONFIG: "${RCLONE_CONFIG:-/config/rclone/rclone.conf}"
+      FLEET_SERVICE_API_KEY: "${FLEET_SERVICE_API_KEY:-}"
     volumes:
       - ./data:/app/data
       - ./rclone:/config/rclone

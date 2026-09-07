@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import secrets
+import socket
 from dataclasses import dataclass
 from typing import Callable, List
 
@@ -46,6 +48,13 @@ def current_actor(request: Request) -> Actor:
             "groups": split_groups(os.getenv("LOCAL_AUTH_GROUPS", "")),
         }
     elif mode == "proxy":
+        client_ip = request.client.host if request.client else ""
+        if client_ip not in _trusted_proxy_ips():
+            # Le port publié sur le LAN permettrait sinon à n'importe qui de
+            # forger les en-têtes X-Forwarded-* et d'usurper une identité,
+            # oauth2-proxy/PocketID inclus. Correctif porté depuis kb87_nexus
+            # (2026-09-06/07).
+            raise HTTPException(status_code=401, detail="Authentication required")
         proxy = config.get("proxy_headers", {})
         identity = {
             "subject": header(request, proxy.get("subject", "X-Forwarded-User")),
@@ -87,3 +96,36 @@ def require_permission(permission: str) -> Callable:
 
 def header(request: Request, name: str) -> str:
     return request.headers.get(name, "").strip()
+
+
+def _trusted_proxy_ips() -> set[str]:
+    """Résout, à chaque appel, les IP actuelles des hôtes de confiance
+    (TRUSTED_PROXY_HOSTS, défaut 'oauth2-proxy' — le nom de service Docker).
+    Pas de cache : une résolution DNS interne coûte <1ms et reste correcte
+    si le conteneur oauth2-proxy est recréé avec une IP différente."""
+    hosts = [h.strip() for h in os.getenv("TRUSTED_PROXY_HOSTS", "oauth2-proxy").split(",") if h.strip()]
+    ips: set[str] = set()
+    for host in hosts:
+        try:
+            ips.add(socket.gethostbyname(host))
+        except OSError:
+            continue
+    return ips
+
+
+def require_backup_read_access(permission: str) -> Callable:
+    """Accepte soit un humain avec la permission donnée, soit un appel
+    machine-à-machine via X-Service-Key (FLEET_SERVICE_API_KEY) — pour
+    l'agrégateur de santé fleet-wide de kb87_nexus."""
+
+    def dependency(request: Request) -> Actor:
+        expected = os.getenv("FLEET_SERVICE_API_KEY", "")
+        provided = header(request, "X-Service-Key")
+        if expected and provided and secrets.compare_digest(provided, expected):
+            return Actor(subject="kb87-nexus-fleet", email="", name="kb87-nexus (fleet)", groups=[], roles=[], permissions=[])
+        actor = current_actor(request)
+        if permission not in actor.permissions:
+            raise HTTPException(status_code=403, detail="Permission refusée")
+        return actor
+
+    return dependency

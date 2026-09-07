@@ -34,5 +34,8 @@ Commit + push sur `main` suffit : GH Actions build l'image ghcr puis déclenche 
 - Les routes PWA (`manifest.webmanifest`, `sw.js`, `icons/`) bypassent l'auth via `OAUTH2_PROXY_SKIP_AUTH_ROUTES`
 - Secrets : `.env` local (jamais commité) ; les valeurs sont aussi dans HashiVault/1Password
 
+## Sécurité + sauvegardes exposées à kb87_nexus (2026-09-07)
+`current_actor()` en mode `proxy` ne fait plus confiance à `X-Forwarded-*` sans vérifier l'origine (`_trusted_proxy_ips`, porté depuis kb87_nexus — le port 8091 est publié sur le LAN). `backend/backups.py` + `GET`/`POST /api/admin/backups` ajoutés (n'existaient pas avant — seul le script cron existait) : `GET` accepte un admin humain OU `X-Service-Key: FLEET_SERVICE_API_KEY` pour l'agrégateur de santé fleet-wide de kb87_nexus (rien de sensible exposé). `POST`/téléchargement restent `settings.manage`.
+
 ## Mémoire homelab
 Contexte infra global : `~/.claude/global-memory/` (carte : `shared/reference_infra_map.md`, diagnostic pannes : skill `homelab-diagnose`).
