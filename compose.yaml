@@ -31,7 +31,9 @@ services:
     depends_on:
       - menu-hebdo
     networks:
-      - default
+      default:
+        aliases:
+          - menu-hebdo-auth-proxy
 
   menu-hebdo:
     image: "${INVENTORY_IMAGE:-ghcr.io/kebel87/menu_hebdo:latest}"
@@ -40,6 +42,8 @@ services:
       - "8091:8000"
     environment:
       AUTH_MODE: "${AUTH_MODE:-proxy}"
+      # Nom distinct : le réseau Inventaire contient aussi un « oauth2-proxy ».
+      TRUSTED_PROXY_HOSTS: "menu-hebdo-auth-proxy"
       MEALIE_URL: "https://mealie.kb87.net"
       MEALIE_API_KEY: "${MEALIE_API_KEY}"
       MEALIE_CACHE_TTL_SECONDS: "${MEALIE_CACHE_TTL_SECONDS:-604800}"
