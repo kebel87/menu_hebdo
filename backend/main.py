@@ -13,6 +13,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from .health import readiness
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -223,6 +225,11 @@ def _start_external_sync_worker() -> None:
 # ---------------------------------------------------------------------------
 # Health / me
 # ---------------------------------------------------------------------------
+
+@app.get("/api/ready", include_in_schema=False)
+def ready():
+    return readiness()
+
 
 @app.get("/api/health")
 def health() -> dict:

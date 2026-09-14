@@ -25,7 +25,7 @@ services:
       OAUTH2_PROXY_PASS_AUTHORIZATION_HEADER: "true"
       OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
       OAUTH2_PROXY_PASS_USER_HEADERS: "true"
-      OAUTH2_PROXY_SKIP_AUTH_ROUTES: "^/manifest.webmanifest$,^/sw.js$,^/icons/.*"
+      OAUTH2_PROXY_SKIP_AUTH_ROUTES: "^/manifest.webmanifest$,^/sw.js$,^/icons/.*,GET=^/api/ready$"
       OAUTH2_PROXY_SKIP_AUTH_STRIP_HEADERS: "false"
       OAUTH2_PROXY_INSECURE_OIDC_ALLOW_UNVERIFIED_EMAIL: "true"
     depends_on:
