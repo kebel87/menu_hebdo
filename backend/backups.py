@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import os
-import subprocess
 from pathlib import Path
 from typing import Any
 
-from scripts.backup_menu import create_backup, copy_to_remote, prune_local_backups
+from scripts.backup_menu import copy_to_remotes, create_backup, parse_remotes, prune_local_backups
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,7 +27,7 @@ def backup_settings() -> dict[str, Any]:
         "rcloneDest": rclone_dest,
         "rcloneBinary": rclone_binary,
         "rcloneConfig": rclone_config,
-        "rcloneConfigured": bool(rclone_dest) and (not rclone_config or Path(rclone_config).exists()),
+        "rcloneConfigured": bool(parse_remotes(rclone_dest)) and (not rclone_config or Path(rclone_config).exists()),
         "databaseExists": db_path.exists(),
     }
 
@@ -100,17 +99,17 @@ def run_backup() -> dict[str, Any]:
     result = create_backup(db_path, backup_dir, str(settings["prefix"]))
     prune_local_backups(backup_dir, str(settings["prefix"]), int(settings["keepLocal"]))
 
-    remote_result: dict[str, Any] = {"enabled": bool(settings["rcloneDest"]), "ok": True, "error": ""}
-    if settings["rcloneDest"]:
-        try:
-            copy_to_remote(
-                result.archive_path,
-                result.checksum_path,
-                str(settings["rcloneDest"]),
-                str(settings["rcloneBinary"]),
-            )
-        except (OSError, subprocess.CalledProcessError) as exc:
-            remote_result = {"enabled": True, "ok": False, "error": str(exc)}
+    remotes = parse_remotes(str(settings["rcloneDest"]))
+    destinations = copy_to_remotes(
+        result.archive_path, result.checksum_path, remotes, str(settings["rcloneBinary"])
+    )
+    errors = [f"{d['dest']}: {d['error']}" for d in destinations if not d["ok"]]
+    remote_result: dict[str, Any] = {
+        "enabled": bool(remotes),
+        "ok": not errors,
+        "error": "; ".join(errors),
+        "destinations": destinations,
+    }
 
     return {
         "created": backup_file_info(result.archive_path),

@@ -41,12 +41,16 @@ def main() -> int:
 
     prune_local_backups(backup_dir, args.prefix, args.keep_local)
 
-    remote = args.rclone_dest or os.getenv("BACKUP_RCLONE_DEST", "").strip()
-    if remote:
-        copy_to_remote(result.archive_path, result.checksum_path, remote, args.rclone_binary)
-        print(f"Copied backup to {remote}")
+    remotes = parse_remotes(args.rclone_dest or os.getenv("BACKUP_RCLONE_DEST", ""))
+    failed = 0
+    for outcome in copy_to_remotes(result.archive_path, result.checksum_path, remotes, args.rclone_binary):
+        if outcome["ok"]:
+            print(f"Copied backup to {outcome['dest']}")
+        else:
+            failed += 1
+            print(f"FAILED copy to {outcome['dest']}: {outcome['error']}", file=sys.stderr)
 
-    return 0
+    return 1 if failed else 0
 
 
 def parse_args() -> argparse.Namespace:
@@ -77,7 +81,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--rclone-dest",
         default=os.getenv("BACKUP_RCLONE_DEST", ""),
-        help="Optional rclone destination, for example gdrive-crypt:MenuHebdo/backups.",
+        help="Optional rclone destination(s), comma-separated for several, for example gdrive-crypt:MenuHebdo/backups.",
     )
     parser.add_argument(
         "--rclone-binary",
@@ -147,6 +151,25 @@ def copy_to_remote(archive_path: Path, checksum_path: Path, remote: str, rclone_
         "*",
     ]
     subprocess.run(command, check=True)
+
+
+def parse_remotes(raw: str) -> list[str]:
+    """Split a comma-separated list of rclone destinations (empty entries ignored)."""
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def copy_to_remotes(
+    archive_path: Path, checksum_path: Path, remotes: list[str], rclone_binary: str
+) -> list[dict[str, object]]:
+    """Copy to every destination; one failing destination never blocks the others."""
+    results: list[dict[str, object]] = []
+    for remote in remotes:
+        try:
+            copy_to_remote(archive_path, checksum_path, remote, rclone_binary)
+            results.append({"dest": remote, "ok": True, "error": ""})
+        except (OSError, subprocess.CalledProcessError) as exc:
+            results.append({"dest": remote, "ok": False, "error": str(exc)})
+    return results
 
 
 if __name__ == "__main__":
